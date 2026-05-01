@@ -5,13 +5,18 @@ local UserInputService = game:GetService("UserInputService")
 local Player = Players.LocalPlayer
 
 -- ============================================
--- MANUELLE SCRIPT LISTE
+-- MANUELLE SCRIPT LISTE 
 -- ============================================
 local SCRIPTS = {
     {
         name = "Knockout",
         loadstring = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/Knockout.lua"))()',
         description = "Knockout Auto win Script"
+    },
+        {
+        name = "Pet Simulator 99",
+        loadstring = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/zabhub.xyz/Exec"))()',
+        description = "Zab Hub best PS99"
     },
 }
 
