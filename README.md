@@ -14,3 +14,12 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Publi
 ```bash
 loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/Knockout.lua"))()
 ```
+
+
+## Pet Simulator 99
+
+
+
+```bash
+loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/zabhub.xyz/Exec"))()
+```
