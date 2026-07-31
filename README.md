@@ -7,7 +7,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Publi
 
   <h1>Copy Loadstrings:</h1>
 
-## Knockout
+## Knockout (Patched)
 
 
 
