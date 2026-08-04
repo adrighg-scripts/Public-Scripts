@@ -10,6 +10,7 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -24,6 +25,7 @@ end
 -- Tabelle zum Speichern der aktiv gespawnten visuellen Workspace-Modelle
 local spawnedVisualPetInstances = {}
 local activeRainbowEffects = {}
+local isScriptRunning = true
 
 local function clearAllVisualPetsFromWorkspace()
     activeRainbowEffects = {}
@@ -93,6 +95,43 @@ local function getStrengthText(subCat, itemName)
     end
 end
 
+-- Funktion zum Starten der Sparkle-Animation auf einem Inventar-Slot
+local function starteSparkleAnimation(itemSlot)
+    if not itemSlot or not itemSlot.Parent then return end
+    
+    local sparkle = Instance.new("ImageLabel")
+    sparkle.Name = "Sparkle"
+    sparkle.Visible = true
+    sparkle.ImageTransparency = 0
+    sparkle.AnchorPoint = Vector2.new(0.5, 0.5)
+    sparkle.Image = "rbxassetid://7112395588"
+    sparkle.BackgroundTransparency = 1
+    sparkle.ImageColor3 = Color3.new(1, 1, 1)
+    sparkle.ZIndex = 6
+    sparkle.BackgroundColor3 = Color3.new(1, 1, 1)
+    
+    sparkle.Position = UDim2.new(math.random(20, 80)/100, 0, math.random(20, 80)/100, 0)
+    sparkle.Size = UDim2.new(0, 0, 0, 0)
+    sparkle.Parent = itemSlot
+
+    local zielGroesse = UDim2.new(0.34, 0, 0.34, 0)
+    local growInfo = TweenInfo.new(5.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+    local growTween = TweenService:Create(sparkle, growInfo, {Size = zielGroesse})
+    
+    growTween:Play()
+    
+    growTween.Completed:Connect(function()
+        if not sparkle.Parent then return end
+        local shrinkInfo = TweenInfo.new(5.5, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
+        local shrinkTween = TweenService:Create(sparkle, shrinkInfo, {Size = UDim2.new(0, 0, 0, 0)})
+        
+        shrinkTween:Play()
+        shrinkTween.Completed:Connect(function()
+            sparkle:Destroy()
+        end)
+    end)
+end
+
 -- Funktion zur Erstellung und Konfiguration eines ItemSlots
 local function setupPetSlot(target, sourceTemplate, itemData)
     if sourceTemplate then
@@ -124,33 +163,49 @@ local function setupPetSlot(target, sourceTemplate, itemData)
 
     local subCat = itemData and string.lower(itemData.SubCategory or "") or ""
     local itemNameLower = itemData and string.lower(itemData.Name or "") or ""
-    local isHugeOrHigher = string.find(subCat, "huge") or string.find(subCat, "titanic") or string.find(subCat, "gargantuan") or string.find(itemNameLower, "huge") or string.find(itemNameLower, "titanic") or string.find(itemNameLower, "gargantuan")
+    local isTitanic = string.find(subCat, "titanic") or string.find(itemNameLower, "titanic")
+    local isHugeOrHigher = string.find(subCat, "huge") or isTitanic or string.find(subCat, "gargantuan") or string.find(itemNameLower, "huge") or string.find(itemNameLower, "gargantuan")
 
     local icon = getOrCreate(target, "Icon", "ImageLabel")
     icon.Image = (itemData and itemData.Icon ~= "") and itemData.Icon or "rbxassetid://91010953570749"
     icon.ImageColor3 = Color3.new(1, 1, 1)
     icon.ImageTransparency = 0
     icon.ScaleType = Enum.ScaleType.Fit
-    icon.Size = UDim2.new(1, 0, 1, 0)
-    icon.Position = UDim2.new(0, 0, 0, 0)
-    icon.AnchorPoint = Vector2.new(0, 0)
+    
+    if isTitanic then
+        icon.AnchorPoint = Vector2.new(0.5, 0.5)
+        icon.Position = UDim2.new(0.5, 0, 0.5, 0)
+        icon.Size = UDim2.new(0.9, 0, 0.9, 0)
+    else
+        icon.Size = UDim2.new(1, 0, 1, 0)
+        icon.Position = UDim2.new(0, 0, 0, 0)
+        icon.AnchorPoint = Vector2.new(0, 0)
+    end
+    
     icon.BackgroundColor3 = Color3.new(1, 1, 1)
     icon.BackgroundTransparency = 1
     icon.Visible = true
     icon.ZIndex = 6
     icon.LayoutOrder = 0
 
-    local rainbowIcon = getOrCreate(icon, "RainbowIcon", "ImageLabel")
-    rainbowIcon.Image = "rbxassetid://91010953570749"
-    rainbowIcon.ImageColor3 = Color3.new(1, 1, 1)
-    rainbowIcon.ImageTransparency = (itemData and itemData.Shiny) and 0.8 or 0.5
-    rainbowIcon.ScaleType = Enum.ScaleType.Fit
-    rainbowIcon.Size = UDim2.new(1, 0, 1, 0)
-    rainbowIcon.Position = UDim2.new(0, 0, 0, 0)
-    rainbowIcon.ZIndex = 7
-    rainbowIcon.Visible = (itemData and itemData.Version == "Rainbow")
+    if not isTitanic then
+        local rainbowIcon = getOrCreate(icon, "RainbowIcon", "ImageLabel")
+        rainbowIcon.Image = "rbxassetid://91010953570749"
+        rainbowIcon.ImageColor3 = Color3.new(1, 1, 1)
+        rainbowIcon.ImageTransparency = (itemData and itemData.Shiny) and 0.8 or 0.5
+        rainbowIcon.ScaleType = Enum.ScaleType.Fit
+        rainbowIcon.Size = UDim2.new(1, 0, 1, 0)
+        rainbowIcon.Position = UDim2.new(0, 0, 0, 0)
+        rainbowIcon.ZIndex = 7
+        rainbowIcon.Visible = (itemData and itemData.Version == "Rainbow")
 
-    getOrCreate(icon, "RainbowGradient", "UIGradient")
+        getOrCreate(icon, "RainbowGradient", "UIGradient")
+    else
+        local oldRainbow = icon:FindFirstChild("RainbowIcon")
+        if oldRainbow then oldRainbow:Destroy() end
+        local oldGrad = icon:FindFirstChild("RainbowGradient")
+        if oldGrad then oldGrad:Destroy() end
+    end
 
     local scribble = getOrCreate(target, "scribble", "ImageLabel")
     if isHugeOrHigher then
@@ -194,8 +249,13 @@ local function setupPetSlot(target, sourceTemplate, itemData)
 
     local strength = getOrCreate(target, "Strength", "TextLabel")
     strength.Text = getStrengthText(itemData and itemData.SubCategory, itemData and itemData.Name)
+    strength.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    strength.LineHeight = 0.89
+    strength.TextScaled = true
+    strength.TextXAlignment = Enum.TextXAlignment.Right
+    strength.TextYAlignment = Enum.TextYAlignment.Center
+    strength.AutoLocalize = false
     strength.TextColor3 = Color3.new(1, 1, 1)
-    strength.TextSize = 18
     strength.FontFace = Font.new("rbxassetid://11702779409", Enum.FontWeight.ExtraBold, Enum.FontStyle.Normal)
     strength.Size = UDim2.new(1, 0, 0.375, 0)
     strength.Position = UDim2.new(1, 0, 0.9, 0)
@@ -205,7 +265,17 @@ local function setupPetSlot(target, sourceTemplate, itemData)
     strength.LayoutOrder = 2
 
     local strengthStroke = getOrCreate(strength, "UIStroke", "UIStroke")
-    getOrCreate(strengthStroke, "Tier Gradient", "UIGradient")
+    strengthStroke.Color = Color3.fromRGB(90, 90, 90)
+    strengthStroke.LineJoinMode = Enum.LineJoinMode.Bevel
+    strengthStroke.Thickness = 2.901
+    strengthStroke:SetAttribute("oldp_thickness", 3)
+    
+    local tierGradient = getOrCreate(strengthStroke, "Tier Gradient", "UIGradient")
+    tierGradient.Rotation = 100
+    tierGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(166, 139, 255)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(173, 79, 132))
+    })
 
     local locked = getOrCreate(target, "Locked", "ImageLabel")
     locked.Image = "rbxassetid://16360862799"
@@ -219,9 +289,17 @@ local function setupPetSlot(target, sourceTemplate, itemData)
 
     local star = getOrCreate(target, "star", "ImageLabel")
     star.Image = getStarId(itemData and itemData.SubCategory, itemData and itemData.Name, itemData and itemData.Rarity)
-    star.Size = UDim2.new(0.3, 0, 0.3, 0)
-    star.Position = UDim2.new(0.05, 0, 0.1, 0)
-    star.AnchorPoint = Vector2.new(0, 0)
+    
+    if isTitanic then
+        star.AnchorPoint = Vector2.new(0, 0.5)
+        star.Position = UDim2.new(-0.03, 0, 0.12, 0)
+        star.Size = UDim2.new(0.461, 0, 0.461, 0)
+    else
+        star.Size = UDim2.new(0.3, 0, 0.3, 0)
+        star.Position = UDim2.new(0.05, 0, 0.1, 0)
+        star.AnchorPoint = Vector2.new(0, 0)
+    end
+    
     star.BackgroundTransparency = 1
     star.ScaleType = Enum.ScaleType.Fit
     star.ZIndex = 8
@@ -241,6 +319,17 @@ local function setupPetSlot(target, sourceTemplate, itemData)
     
     target.BackgroundColor3 = Color3.new(1, 1, 1)
     target.BackgroundTransparency = 1
+    target.BorderSizePixel = 0
+
+    -- Sparkle-Loop für jede Titanic starten
+    if isTitanic then
+        task.spawn(function()
+            while isScriptRunning and target and target.Parent do
+                starteSparkleAnimation(target)
+                task.wait(4)
+            end
+        end)
+    end
 end
 
 -- Erstellt die Shiny-Effekte mit spezifischen Keypoints je nach Pet-Typ
@@ -375,6 +464,7 @@ local function applyCustomRainbowStyle(rootInstance, isShiny)
 end
 
 RunService.RenderStepped:Connect(function()
+    if not isScriptRunning then return end
     local hue = (tick() * 0.4) % 1
     local rainbowColor = Color3.fromHSV(hue, 1, 1)
     
@@ -503,6 +593,7 @@ local function restoreOriginalGems()
 end
 
 local function updateAllGemsDisplays()
+    if not isScriptRunning then return end
     local totalDisplayGems = realBaseGemsCount
     if visualGemsEnabled then
         totalDisplayGems = realBaseGemsCount + addedGemsTotal
@@ -556,12 +647,6 @@ local function parseInputWithSuffix(text)
     end
     return pureSum
 end
-
-screenGui.Destroying:Connect(function()
-    restoreOriginalGems()
-    saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
-    clearAllVisualPetsFromWorkspace()
-end)
 
 local mainFrame = Instance.new("ImageLabel")
 mainFrame.Size = UDim2.new(0, 670, 0, 500)
@@ -665,11 +750,45 @@ closeIconX.TextColor3 = Color3.fromRGB(255, 255, 255)
 closeIconX.TextSize = 16
 closeIconX.Parent = closeButton
 
-closeButton.MouseButton1Click:Connect(function()
+local refreshAllVisualPetsInWorkspace = function() end
+local injectVisualPetsIntoGameInventory = function() end
+local removeInjectedPetsFromGameInventory = function() end
+
+removeInjectedPetsFromGameInventory = function()
+    local inventoryFrame = playerGui:FindFirstChild("Inventory")
+    local mainPetsContainer = inventoryFrame and inventoryFrame:FindFirstChild("Frame") and inventoryFrame.Frame:FindFirstChild("Main") and inventoryFrame.Frame.Main:FindFirstChild("Pets")
+    
+    if not mainPetsContainer then return end
+
+    for _, child in ipairs(mainPetsContainer:GetChildren()) do
+        if child:GetAttribute("InjectedVisualPet") == true then
+            child:Destroy()
+        end
+        if child:IsA("Folder") or child:IsA("Frame") then
+            for _, subChild in ipairs(child:GetChildren()) do
+                if subChild:GetAttribute("InjectedVisualPet") == true then
+                    subChild:Destroy()
+                end
+            end
+        end
+    end
+end
+
+local function terminateScript()
+    isScriptRunning = false
     restoreOriginalGems()
     saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
     clearAllVisualPetsFromWorkspace()
+    removeInjectedPetsFromGameInventory()
     screenGui:Destroy()
+end
+
+closeButton.MouseButton1Click:Connect(terminateScript)
+
+screenGui.Destroying:Connect(function()
+    if isScriptRunning then
+        terminateScript()
+    end
 end)
 
 local toggleVisualBtn = Instance.new("TextButton")
@@ -686,29 +805,29 @@ toggleVisualBtn.Parent = mainFrame
 
 Instance.new("UICorner", toggleVisualBtn).CornerRadius = UDim.new(0, 10)
 
-local refreshAllVisualPetsInWorkspace = function() end
-local injectVisualPetsIntoGameInventory = function() end
-
 local function toggleVisualState()
+    if not isScriptRunning then return end
     visualGemsEnabled = not visualGemsEnabled
     if visualGemsEnabled then
         toggleVisualBtn.Text = "ON"
         toggleVisualBtn.BackgroundColor3 = Color3.fromRGB(70, 210, 110)
+        refreshAllVisualPetsInWorkspace()
+        injectVisualPetsIntoGameInventory()
     else
         toggleVisualBtn.Text = "OFF"
         toggleVisualBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
         restoreOriginalGems()
         clearAllVisualPetsFromWorkspace()
+        removeInjectedPetsFromGameInventory()
     end
     updateAllGemsDisplays()
     saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
-    refreshAllVisualPetsInWorkspace()
-    injectVisualPetsIntoGameInventory()
 end
 
 toggleVisualBtn.MouseButton1Click:Connect(toggleVisualState)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not isScriptRunning then return end
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.F5 then
         screenGui.Enabled = not screenGui.Enabled
@@ -828,6 +947,7 @@ local function updateSubTabs()
         subTabButtons[subName] = subBtn
 
         subBtn.MouseButton1Click:Connect(function()
+            if not isScriptRunning then return end
             local activeKey = currentMainCategory .. "_" .. ((currentMainCategory == "Added Visuals") and currentVisualSubCategory or currentPetSubCategory)
             scrollPositions[activeKey] = contentGrid.CanvasPosition.Y
 
@@ -962,12 +1082,14 @@ addGemsBtn.Parent = gemsCard
 Instance.new("UICorner", addGemsBtn).CornerRadius = UDim.new(0, 10)
 
 addGemsInputBox:GetPropertyChangedSignal("Text"):Connect(function()
+    if not isScriptRunning then return end
     local addVal = parseInputWithSuffix(addGemsInputBox.Text)
     local totalVal = realBaseGemsCount + addedGemsTotal + addVal
     finalGemsLabel.Text = "✨ Total Gems After Adding: " .. formatWithBracket(totalVal)
 end)
 
 addGemsBtn.MouseButton1Click:Connect(function()
+    if not isScriptRunning then return end
     local addVal = parseInputWithSuffix(addGemsInputBox.Text)
     if addVal > 0 then
         addedGemsTotal = addedGemsTotal + addVal
@@ -988,6 +1110,7 @@ visualGemsContainer.Parent = mainFrame
 
 local updateVisualGemsCard
 updateVisualGemsCard = function()
+    if not isScriptRunning then return end
     for _, child in ipairs(visualGemsContainer:GetChildren()) do child:Destroy() end
 
     local vgCard = Instance.new("Frame")
@@ -1050,6 +1173,7 @@ updateVisualGemsCard = function()
     finalVGsLabel.Parent = vgCard
 
     removeVGsInputBox:GetPropertyChangedSignal("Text"):Connect(function()
+        if not isScriptRunning then return end
         local inputVal = parseInputWithSuffix(removeVGsInputBox.Text)
         local currentTotal = realBaseGemsCount + addedGemsTotal
         local totalVal = math.max(0, currentTotal - inputVal)
@@ -1083,6 +1207,7 @@ updateVisualGemsCard = function()
     Instance.new("UICorner", deleteAllBtn).CornerRadius = UDim.new(0, 10)
 
     deleteBtn.MouseButton1Click:Connect(function()
+        if not isScriptRunning then return end
         local remVal = parseInputWithSuffix(removeVGsInputBox.Text)
         if remVal > addedGemsTotal then remVal = addedGemsTotal end
         if remVal > 0 then
@@ -1095,6 +1220,7 @@ updateVisualGemsCard = function()
     end)
 
     deleteAllBtn.MouseButton1Click:Connect(function()
+        if not isScriptRunning then return end
         addedGemsTotal = 0
         removeVGsInputBox.Text = ""
         saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
@@ -1113,6 +1239,7 @@ local masterDatabase = {
 }
 
 local function openConfigPrompt(itemName, baseIcon, category, goldenIcon)
+    if not isScriptRunning then return end
     if playerGui:FindFirstChild("PS99ConfigPromptGui") then
         playerGui.PS99ConfigPromptGui:Destroy()
     end
@@ -1194,7 +1321,7 @@ local function openConfigPrompt(itemName, baseIcon, category, goldenIcon)
 
     task.spawn(function()
         local hue = 0
-        while promptGui.Parent do
+        while isScriptRunning and promptGui.Parent do
             hue = (hue + 0.004) % 1
             local keypoints = {}
             for i = 0, 6 do
@@ -1295,9 +1422,9 @@ local function openConfigPrompt(itemName, baseIcon, category, goldenIcon)
         updateAddButtonText()
     end
 
-    amtUp.MouseButton1Click:Connect(function() updateAmount(1) end)
-    amtDown.MouseButton1Click:Connect(function() updateAmount(-1) end)
-    amtBox:GetPropertyChangedSignal("Text"):Connect(updateAddButtonText)
+    amtUp.MouseButton1Click:Connect(function() if isScriptRunning then updateAmount(1) end end)
+    amtDown.MouseButton1Click:Connect(function() if isScriptRunning then updateAmount(-1) end end)
+    amtBox:GetPropertyChangedSignal("Text"):Connect(function() if isScriptRunning then updateAddButtonText() end end)
 
     local selectedVersion = "Normal"
     local isShiny = false
@@ -1353,6 +1480,7 @@ local function openConfigPrompt(itemName, baseIcon, category, goldenIcon)
         verButtons[verName] = vBtn
 
         vBtn.MouseButton1Click:Connect(function()
+            if not isScriptRunning then return end
             selectedVersion = verName
             for v, btn in pairs(verButtons) do
                 btn.BackgroundColor3 = (v == selectedVersion) and Color3.fromRGB(255, 130, 40) or Color3.fromRGB(36, 24, 70)
@@ -1373,6 +1501,7 @@ local function openConfigPrompt(itemName, baseIcon, category, goldenIcon)
     Instance.new("UICorner", shinyBtn).CornerRadius = UDim.new(0, 8)
 
     shinyBtn.MouseButton1Click:Connect(function()
+        if not isScriptRunning then return end
         isShiny = not isShiny
         shinyBtn.Text = isShiny and "✨ Shiny: ON" or "✨ Shiny: OFF"
         shinyBtn.BackgroundColor3 = isShiny and Color3.fromRGB(220, 160, 40) or Color3.fromRGB(36, 24, 70)
@@ -1381,6 +1510,7 @@ local function openConfigPrompt(itemName, baseIcon, category, goldenIcon)
     end)
 
     confirmBtn.MouseButton1Click:Connect(function()
+        if not isScriptRunning then return end
         local amount = parseInputWithSuffix(amtBox.Text)
         if amount > 0 then
             local foundExisting = false
@@ -1412,7 +1542,10 @@ local function openConfigPrompt(itemName, baseIcon, category, goldenIcon)
             end
 
             saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
-            injectVisualPetsIntoGameInventory()
+            if visualGemsEnabled then
+                injectVisualPetsIntoGameInventory()
+                refreshAllVisualPetsInWorkspace()
+            end
         end
         uiBlocker.Visible = false
         promptGui:Destroy()
@@ -1420,6 +1553,7 @@ local function openConfigPrompt(itemName, baseIcon, category, goldenIcon)
 end
 
 refreshGrid = function()
+    if not isScriptRunning then return end
     for _, child in ipairs(contentGrid:GetChildren()) do
         if child:IsA("TextButton") or child:IsA("Frame") then child:Destroy() end
     end
@@ -1540,7 +1674,9 @@ refreshGrid = function()
                 nameLabel.Parent = card
 
                 card.MouseButton1Click:Connect(function()
-                    openConfigPrompt(itemName, item.Icon, currentPetSubCategory, item.GoldenIcon)
+                    if isScriptRunning then
+                        openConfigPrompt(itemName, item.Icon, currentPetSubCategory, item.GoldenIcon)
+                    end
                 end)
                 
                 card.Parent = contentGrid
@@ -1548,6 +1684,7 @@ refreshGrid = function()
 
             if isAddedVisuals then
                 card.MouseButton1Click:Connect(function()
+                    if not isScriptRunning then return end
                     if playerGui:FindFirstChild("PS99RemovePromptGui") then
                         playerGui.PS99RemovePromptGui:Destroy()
                     end
@@ -1649,6 +1786,7 @@ refreshGrid = function()
                     Instance.new("UICorner", remAllBtn).CornerRadius = UDim.new(0, 8)
 
                     remPartBtn.MouseButton1Click:Connect(function()
+                        if not isScriptRunning then return end
                         local remVal = parseInputWithSuffix(remInput.Text)
                         item.Amount = item.Amount - remVal
                         if item.Amount <= 0 then
@@ -1663,10 +1801,14 @@ refreshGrid = function()
                         uiBlocker.Visible = false
                         rGui:Destroy()
                         refreshGrid()
-                        injectVisualPetsIntoGameInventory()
+                        if visualGemsEnabled then
+                            injectVisualPetsIntoGameInventory()
+                            refreshAllVisualPetsInWorkspace()
+                        end
                     end)
 
                     remAllBtn.MouseButton1Click:Connect(function()
+                        if not isScriptRunning then return end
                         for idx, invItem in ipairs(addedItemsInventory) do
                             if invItem == item then
                                 table.remove(addedItemsInventory, idx)
@@ -1677,7 +1819,10 @@ refreshGrid = function()
                         uiBlocker.Visible = false
                         rGui:Destroy()
                         refreshGrid()
-                        injectVisualPetsIntoGameInventory()
+                        if visualGemsEnabled then
+                            injectVisualPetsIntoGameInventory()
+                            refreshAllVisualPetsInWorkspace()
+                        end
                     end)
                 end)
             end
@@ -1686,6 +1831,7 @@ refreshGrid = function()
 end
 
 local function spawnVisualPetModel(itemData)
+    if not isScriptRunning then return nil end
     if not petsDirectory then return nil end
     
     local subFolderName = "Uncategorized"
@@ -1763,6 +1909,7 @@ local function spawnVisualPetModel(itemData)
 end
 
 refreshAllVisualPetsInWorkspace = function()
+    if not isScriptRunning then return end
     clearAllVisualPetsFromWorkspace()
     if not visualGemsEnabled or not addedItemsInventory then return end
     
@@ -1773,7 +1920,7 @@ refreshAllVisualPetsInWorkspace = function()
             
             local spawnCount = 1
             if isTitanicOrGargantuan then
-                spawnCount = item.Amount or 1
+                spawnCount = 1
             else
                 spawnCount = math.min(item.Amount or 1, 10)
             end
@@ -1787,18 +1934,15 @@ refreshAllVisualPetsInWorkspace = function()
 end
 
 injectVisualPetsIntoGameInventory = function()
+    if not isScriptRunning then return end
+    removeInjectedPetsFromGameInventory()
+
+    if not visualGemsEnabled or not addedItemsInventory then return end
+
     local inventoryFrame = playerGui:FindFirstChild("Inventory")
     local mainPetsContainer = inventoryFrame and inventoryFrame:FindFirstChild("Frame") and inventoryFrame.Frame:FindFirstChild("Main") and inventoryFrame.Frame.Main:FindFirstChild("Pets")
     
     if not mainPetsContainer then return end
-
-    for _, child in ipairs(mainPetsContainer:GetChildren()) do
-        if child:GetAttribute("InjectedVisualPet") == true then
-            child:Destroy()
-        end
-    end
-
-    if not visualGemsEnabled or not addedItemsInventory then return end
 
     for _, item in ipairs(addedItemsInventory) do
         if item.Category == "Pets" then
@@ -1876,6 +2020,7 @@ task.spawn(function()
     end
 
     for _, entry in ipairs(petsData) do
+        if not isScriptRunning then return end
         local config = entry.configData or {}
         local name = config.name or entry.configName or "Unknown Pet"
         local goldenThumb = "rbxassetid://0"
@@ -1895,15 +2040,20 @@ task.spawn(function()
         else table.insert(masterDatabase.Pets.Pets, petItem) end
     end
 
-    loadingLabel:Destroy()
+    if loadingLabel and loadingLabel.Parent then
+        loadingLabel:Destroy()
+    end
     updateSubTabs()
     refreshGrid()
 end)
 
-searchBox:GetPropertyChangedSignal("Text"):Connect(refreshGrid)
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    if isScriptRunning then refreshGrid() end
+end)
 
 for catName, btn in pairs(mainTabButtons) do
     btn.MouseButton1Click:Connect(function()
+        if not isScriptRunning then return end
         local activeKey = currentMainCategory .. "_" .. ((currentMainCategory == "Added Visuals") and currentVisualSubCategory or currentPetSubCategory)
         scrollPositions[activeKey] = contentGrid.CanvasPosition.Y
 
@@ -1938,12 +2088,14 @@ local function getInventorySignature()
 end
 
 task.spawn(function()
-    while screenGui and screenGui.Parent do
-        local currentSig = getInventorySignature()
-        if currentSig ~= lastInventorySignature then
-            lastInventorySignature = currentSig
-            refreshAllVisualPetsInWorkspace()
-            injectVisualPetsIntoGameInventory()
+    while isScriptRunning and screenGui and screenGui.Parent do
+        if visualGemsEnabled then
+            local currentSig = getInventorySignature()
+            if currentSig ~= lastInventorySignature then
+                lastInventorySignature = currentSig
+                refreshAllVisualPetsInWorkspace()
+                injectVisualPetsIntoGameInventory()
+            end
         end
         task.wait(0.5)
     end
@@ -1952,7 +2104,9 @@ end)
 if visualGemsEnabled then
     task.spawn(function()
         task.wait(2)
-        refreshAllVisualPetsInWorkspace()
-        injectVisualPetsIntoGameInventory()
+        if isScriptRunning then
+            refreshAllVisualPetsInWorkspace()
+            injectVisualPetsIntoGameInventory()
+        end
     end)
 end
