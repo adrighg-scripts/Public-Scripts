@@ -1,0 +1,1958 @@
+-- Altes Skript / GUI schließen, falls es bereits ausgeführt wurde
+if game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("PS99ColorfulApiBrowser") then
+    game:GetService("Players").LocalPlayer.PlayerGui.PS99ColorfulApiBrowser:Destroy()
+end
+
+-- Services
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local directory = ReplicatedStorage:WaitForChild("__DIRECTORY", 5)
+local petsDirectory = directory and directory:WaitForChild("Pets", 5)
+
+if not petsDirectory then
+    warn("[PetVisualSystem] FEHLER: '__DIRECTORY.Pets' wurde in ReplicatedStorage nicht gefunden!")
+end
+
+-- Tabelle zum Speichern der aktiv gespawnten visuellen Workspace-Modelle
+local spawnedVisualPetInstances = {}
+local activeRainbowEffects = {}
+
+local function clearAllVisualPetsFromWorkspace()
+    activeRainbowEffects = {}
+    for _, model in ipairs(spawnedVisualPetInstances) do
+        if model and model.Parent then
+            model:Destroy()
+        end
+    end
+    spawnedVisualPetInstances = {}
+end
+
+-- Hilfsfunktion: Setzt Kollisionen aus, fixiert die Teile, damit sie nicht durchfallen
+local function setupPetModelPhysics(model)
+    if not model then return end
+    for _, desc in ipairs(model:GetDescendants()) do
+        if desc:IsA("BasePart") then
+            desc.CanCollide = false
+            desc.CanQuery = false
+            desc.CanTouch = false
+            desc.Anchored = true 
+        end
+    end
+end
+
+-- Funktion zur Ermittlung der korrekten Star-ID je nach Pet-Typ und Rarity
+local function getStarId(subCat, itemName, rarity)
+    local subCatLower = string.lower(subCat or "")
+    local nameLower = string.lower(itemName or "")
+    local rarityLower = string.lower(rarity or "")
+
+    if string.find(subCatLower, "huge") or string.find(nameLower, "huge") then
+        return "rbxassetid://17846631169"
+    elseif string.find(subCatLower, "titanic") or string.find(nameLower, "titanic") then
+        return "rbxassetid://15200206892"
+    elseif string.find(subCatLower, "gargantuan") or string.find(nameLower, "gargantuan") then
+        return "rbxassetid://107212846292795"
+    elseif string.find(subCatLower, "exclusive") or string.find(nameLower, "exclusive") then
+        return "rbxassetid://17846631605"
+    else
+        local rarities = {
+            ["rare"] = "rbxassetid://15211278088",
+            ["epic"] = "rbxassetid://15211277885",
+            ["legendary"] = "rbxassetid://15200207030",
+            ["mythical"] = "rbxassetid://16334437303",
+            ["exotic"] = "rbxassetid://16334437019",
+            ["devine"] = "rbxassetid://16334436751",
+            ["superior"] = "rbxassetid://16334437151",
+            ["celestial"] = "rbxassetid://16334436886"
+        }
+        return rarities[rarityLower] or "rbxassetid://15211278088"
+    end
+end
+
+-- Funktion zur Ermittlung des exakten Strength-Wertes ohne graue Prefixe
+local function getStrengthText(subCat, itemName)
+    local subCatLower = string.lower(subCat or "")
+    local nameLower = string.lower(itemName or "")
+
+    if string.find(subCatLower, "gargantuan") or string.find(nameLower, "gargantuan") then
+        return "?????"
+    elseif string.find(subCatLower, "titanic") or string.find(nameLower, "titanic") then
+        return "????"
+    elseif string.find(subCatLower, "huge") or string.find(nameLower, "huge") then
+        return "???"
+    else
+        return "1"
+    end
+end
+
+-- Funktion zur Erstellung und Konfiguration eines ItemSlots
+local function setupPetSlot(target, sourceTemplate, itemData)
+    if sourceTemplate then
+        for _, attrName in ipairs(sourceTemplate:GetAttributes()) do
+            target:SetAttribute(attrName, sourceTemplate:GetAttribute(attrName))
+        end
+    end
+    
+    target:SetAttribute("PetUI", true)
+    target:SetAttribute("isVisible", true)
+    target:SetAttribute("Tick", 0)
+    if itemData then
+        target:SetAttribute("PetName", itemData.Name)
+        target:SetAttribute("Version", itemData.Version)
+        target:SetAttribute("Shiny", itemData.Shiny)
+    end
+
+    local function getOrCreate(parent, name, className)
+        local found = parent:FindFirstChild(name)
+        if not found then
+            found = Instance.new(className)
+            found.Name = name
+            found.Parent = parent
+        end
+        return found
+    end
+
+    getOrCreate(target, "ButtonUIScale", "UIScale")
+
+    local subCat = itemData and string.lower(itemData.SubCategory or "") or ""
+    local itemNameLower = itemData and string.lower(itemData.Name or "") or ""
+    local isHugeOrHigher = string.find(subCat, "huge") or string.find(subCat, "titanic") or string.find(subCat, "gargantuan") or string.find(itemNameLower, "huge") or string.find(itemNameLower, "titanic") or string.find(itemNameLower, "gargantuan")
+
+    local icon = getOrCreate(target, "Icon", "ImageLabel")
+    icon.Image = (itemData and itemData.Icon ~= "") and itemData.Icon or "rbxassetid://91010953570749"
+    icon.ImageColor3 = Color3.new(1, 1, 1)
+    icon.ImageTransparency = 0
+    icon.ScaleType = Enum.ScaleType.Fit
+    icon.Size = UDim2.new(1, 0, 1, 0)
+    icon.Position = UDim2.new(0, 0, 0, 0)
+    icon.AnchorPoint = Vector2.new(0, 0)
+    icon.BackgroundColor3 = Color3.new(1, 1, 1)
+    icon.BackgroundTransparency = 1
+    icon.Visible = true
+    icon.ZIndex = 6
+    icon.LayoutOrder = 0
+
+    local rainbowIcon = getOrCreate(icon, "RainbowIcon", "ImageLabel")
+    rainbowIcon.Image = "rbxassetid://91010953570749"
+    rainbowIcon.ImageColor3 = Color3.new(1, 1, 1)
+    rainbowIcon.ImageTransparency = (itemData and itemData.Shiny) and 0.8 or 0.5
+    rainbowIcon.ScaleType = Enum.ScaleType.Fit
+    rainbowIcon.Size = UDim2.new(1, 0, 1, 0)
+    rainbowIcon.Position = UDim2.new(0, 0, 0, 0)
+    rainbowIcon.ZIndex = 7
+    rainbowIcon.Visible = (itemData and itemData.Version == "Rainbow")
+
+    getOrCreate(icon, "RainbowGradient", "UIGradient")
+
+    local scribble = getOrCreate(target, "scribble", "ImageLabel")
+    if isHugeOrHigher then
+        scribble.Visible = false
+    else
+        scribble.Image = "rbxassetid://12534446882"
+        scribble.ImageColor3 = Color3.new(1, 1, 1)
+        scribble.ImageTransparency = 0.55
+        scribble.ScaleType = Enum.ScaleType.Fit
+        scribble.Size = UDim2.new(1.25, 0, 1.25, 0)
+        scribble.Position = UDim2.new(0.5, 0, 0.5, 0)
+        scribble.AnchorPoint = Vector2.new(0.5, 0.5)
+        scribble.BackgroundTransparency = 1
+        scribble.ZIndex = 5
+        scribble.Visible = true
+        getOrCreate(scribble, "Tier Gradient", "UIGradient")
+    end
+
+    local select = getOrCreate(target, "Select", "ImageLabel")
+    select.Image = "rbxassetid://13744994506"
+    select.Size = UDim2.new(1, 0, 1, 0)
+    select.BackgroundTransparency = 1
+    select.Visible = false
+    select.ZIndex = 5
+
+    local quantity = getOrCreate(target, "Quantity", "TextLabel")
+    if isHugeOrHigher then
+        quantity.Visible = false
+    else
+        quantity.Visible = true
+        quantity.Text = itemData and ("x" .. tostring(itemData.Amount)) or "x2"
+        quantity.TextColor3 = Color3.new(1, 1, 1)
+        quantity.TextSize = 18
+        quantity.FontFace = Font.new("rbxassetid://11702779409", Enum.FontWeight.ExtraBold, Enum.FontStyle.Normal)
+        quantity.Size = UDim2.new(0.925, 0, 0.2, 0)
+        quantity.Position = UDim2.new(0.075, 0, 0.05, 0)
+        quantity.BackgroundTransparency = 1
+        quantity.ZIndex = 9
+        getOrCreate(quantity, "UIStroke", "UIStroke")
+    end
+
+    local strength = getOrCreate(target, "Strength", "TextLabel")
+    strength.Text = getStrengthText(itemData and itemData.SubCategory, itemData and itemData.Name)
+    strength.TextColor3 = Color3.new(1, 1, 1)
+    strength.TextSize = 18
+    strength.FontFace = Font.new("rbxassetid://11702779409", Enum.FontWeight.ExtraBold, Enum.FontStyle.Normal)
+    strength.Size = UDim2.new(1, 0, 0.375, 0)
+    strength.Position = UDim2.new(1, 0, 0.9, 0)
+    strength.AnchorPoint = Vector2.new(1, 0.5)
+    strength.BackgroundTransparency = 1
+    strength.ZIndex = 8
+    strength.LayoutOrder = 2
+
+    local strengthStroke = getOrCreate(strength, "UIStroke", "UIStroke")
+    getOrCreate(strengthStroke, "Tier Gradient", "UIGradient")
+
+    local locked = getOrCreate(target, "Locked", "ImageLabel")
+    locked.Image = "rbxassetid://16360862799"
+    locked.ImageColor3 = Color3.fromRGB(254, 204, 38)
+    locked.Size = UDim2.new(0.25, 0, 0.25, 0)
+    locked.Position = UDim2.new(0.2, 0, 0.15, 0)
+    locked.AnchorPoint = Vector2.new(0.5, 0.5)
+    locked.BackgroundTransparency = 1
+    locked.Visible = false
+    locked.ZIndex = 11
+
+    local star = getOrCreate(target, "star", "ImageLabel")
+    star.Image = getStarId(itemData and itemData.SubCategory, itemData and itemData.Name, itemData and itemData.Rarity)
+    star.Size = UDim2.new(0.3, 0, 0.3, 0)
+    star.Position = UDim2.new(0.05, 0, 0.1, 0)
+    star.AnchorPoint = Vector2.new(0, 0)
+    star.BackgroundTransparency = 1
+    star.ScaleType = Enum.ScaleType.Fit
+    star.ZIndex = 8
+    star.LayoutOrder = 1
+
+    local points = getOrCreate(target, "Points", "TextLabel")
+    points.Text = "1pt"
+    points.TextColor3 = Color3.new(1, 1, 1)
+    points.TextSize = 11
+    points.FontFace = Font.new("rbxassetid://11702779409", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+    points.Size = UDim2.new(1, 0, 0.3, 0)
+    points.BackgroundTransparency = 1
+    points.Visible = false
+    points.ZIndex = 10
+
+    getOrCreate(points, "UIStroke", "UIStroke")
+    
+    target.BackgroundColor3 = Color3.new(1, 1, 1)
+    target.BackgroundTransparency = 1
+end
+
+-- Erstellt die Shiny-Effekte mit spezifischen Keypoints je nach Pet-Typ
+local function applyShinyEffects(clonedModel, subCat)
+    if not clonedModel then return end
+
+    local sizeSequence
+    local subCatLower = string.lower(subCat or "")
+    
+    if string.find(subCatLower, "gargantuan") then
+        sizeSequence = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0, 0),
+            NumberSequenceKeypoint.new(0.169133, 34.436125, 0),
+            NumberSequenceKeypoint.new(0.411205, 40.028375, 0),
+            NumberSequenceKeypoint.new(1, 47.38650, 0)
+        })
+    elseif string.find(subCatLower, "titanic") then
+        sizeSequence = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0, 0),
+            NumberSequenceKeypoint.new(0.169133, 13.77445, 0),
+            NumberSequenceKeypoint.new(0.411205, 16.01135, 0),
+            NumberSequenceKeypoint.new(1, 18.95460, 0)
+        })
+    elseif string.find(subCatLower, "huge") then
+        sizeSequence = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0, 0),
+            NumberSequenceKeypoint.new(0.169133, 5.50978, 0),
+            NumberSequenceKeypoint.new(0.411205, 6.40454, 0),
+            NumberSequenceKeypoint.new(1, 7.58184, 0)
+        })
+    else
+        sizeSequence = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0, 0),
+            NumberSequenceKeypoint.new(0.169133, 2.20391, 0),
+            NumberSequenceKeypoint.new(0.411205, 2.56181, 0),
+            NumberSequenceKeypoint.new(1, 3.03274, 0)
+        })
+    end
+
+    local targetParts = clonedModel:IsA("BasePart") and {clonedModel} or clonedModel:GetDescendants()
+    
+    for _, part in ipairs(targetParts) do
+        if part:IsA("BasePart") then
+            if not part:FindFirstChild("ShinyTrail") then
+                pcall(function()
+                    local trail = Instance.new("Trail")
+                    trail.Name = "ShinyTrail"
+                    trail.Enabled = true
+                    trail.LightInfluence = 0
+                    trail.LightEmission = 1
+                    trail.Brightness = 10
+                    trail.Lifetime = 0.5
+                    trail.Texture = ""
+                    trail.Parent = part
+                end)
+            end
+            
+            local centerAtt = part:FindFirstChild("center")
+            if not centerAtt or not centerAtt:IsA("Attachment") then
+                pcall(function()
+                    centerAtt = Instance.new("Attachment")
+                    centerAtt.Name = "center"
+                    centerAtt.Position = Vector3.new(0, 0, 0)
+                    centerAtt.Parent = part
+                end)
+            end
+            
+            if centerAtt and not centerAtt:FindFirstChild("Shiny") then
+                pcall(function()
+                    local shinyEmitter = Instance.new("ParticleEmitter")
+                    shinyEmitter.Name = "Shiny"
+                    shinyEmitter.Texture = "rbxassetid://16412400324"
+                    shinyEmitter.Brightness = 10
+                    shinyEmitter.Rate = 6.5
+                    shinyEmitter.Lifetime = NumberRange.new(1, 1.5)
+                    shinyEmitter.Speed = NumberRange.new(0.002)
+                    shinyEmitter.Rotation = NumberRange.new(-360, 360)
+                    shinyEmitter.ZOffset = 0.96
+                    shinyEmitter.LightEmission = 1
+                    shinyEmitter.LightInfluence = 0
+                    shinyEmitter.Orientation = Enum.ParticleOrientation.FacingCamera
+                    shinyEmitter.Enabled = true
+                    shinyEmitter.Size = sizeSequence
+                    shinyEmitter.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 1, 0),
+                        NumberSequenceKeypoint.new(0.099, 1, 0),
+                        NumberSequenceKeypoint.new(0.5, 0.732),
+                        NumberSequenceKeypoint.new(1, 0, 0)
+                    })
+                    shinyEmitter:SetAttribute("EmitCount", 6)
+                    shinyEmitter.Parent = centerAtt
+                end)
+            end
+        end
+    end
+end
+
+-- Erstellt den Rainbow-Stil
+local function applyCustomRainbowStyle(rootInstance, isShiny)
+    local targetParts = rootInstance:IsA("BasePart") and {rootInstance} or rootInstance:GetDescendants()
+    local rainbowTransparency = isShiny and 0.85 or 0.5
+    
+    for _, part in ipairs(targetParts) do
+        if part:IsA("BasePart") then
+            for _, child in ipairs(part:GetChildren()) do
+                if child:IsA("SurfaceAppearance") then
+                    child:Destroy()
+                end
+            end
+            
+            local faces = {
+                Enum.NormalId.Top, Enum.NormalId.Bottom, 
+                Enum.NormalId.Left, Enum.NormalId.Right, 
+                Enum.NormalId.Front, Enum.NormalId.Back
+            }
+            
+            for _, face in ipairs(faces) do
+                pcall(function()
+                    local decal = Instance.new("Decal")
+                    decal.Name = "__RAINBOWFX"
+                    decal.Texture = "rbxassetid://4615292350"
+                    decal.Face = face
+                    decal.Transparency = rainbowTransparency
+                    decal.ZIndex = 10
+                    decal.Parent = part
+                    
+                    table.insert(activeRainbowEffects, decal)
+                end)
+            end
+        end
+    end
+end
+
+RunService.RenderStepped:Connect(function()
+    local hue = (tick() * 0.4) % 1
+    local rainbowColor = Color3.fromHSV(hue, 1, 1)
+    
+    for _, decal in ipairs(activeRainbowEffects) do
+        if decal and decal.Parent then
+            decal.Color3 = rainbowColor
+        end
+    end
+end)
+
+local function getPlayerGems()
+    if player:FindFirstChild("leaderstats") then
+        local stats = player.leaderstats
+        if stats:FindFirstChild("\240\159\146\142 Diamonds") then return stats["\240\159\146\142 Diamonds"].Value end
+        if stats:FindFirstChild("Diamonds") then return stats.Diamonds.Value
+        elseif stats:FindFirstChild("Gems") then return stats.Gems.Value end
+    end
+    if player:GetAttribute("Diamonds") then return player:GetAttribute("Diamonds")
+    elseif player:GetAttribute("Gems") then return player:GetAttribute("Gems") end
+    return 30000000
+end
+
+local realBaseGemsCount = getPlayerGems()
+
+local rootFolderName = "PS99 Visual Script"
+local playerFolderName = rootFolderName .. "/" .. player.Name
+
+if makefolder and isfolder then
+    if not isfolder(rootFolderName) then makefolder(rootFolderName) end
+    if not isfolder(playerFolderName) then makefolder(playerFolderName) end
+end
+
+local saveFilePath = playerFolderName .. "/data.json"
+
+local function saveData(gemsTotal, itemsList, visualState)
+    if writefile then
+        local success, encoded = pcall(function()
+            return HttpService:JSONEncode({
+                Gems = gemsTotal,
+                Items = itemsList,
+                VisualsEnabled = visualState
+            })
+        end)
+        if success then writefile(saveFilePath, encoded) end
+    end
+end
+
+local function loadSavedData()
+    if readfile and isfile and isfile(saveFilePath) then
+        local success, decoded = pcall(function()
+            return HttpService:JSONDecode(readfile(saveFilePath))
+        end)
+        if success and type(decoded) == "table" then
+            local vState = false
+            if decoded.VisualsEnabled ~= nil then vState = decoded.VisualsEnabled end
+            return decoded.Gems or 0, decoded.Items or {}, vState
+        end
+    end
+    return 0, {}, false
+end
+
+if playerGui:FindFirstChild("PS99ColorfulApiBrowser") then
+    playerGui.PS99ColorfulApiBrowser:Destroy()
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "PS99ColorfulApiBrowser"
+screenGui.ResetOnSpawn = false
+screenGui.Enabled = false
+screenGui.Parent = playerGui
+
+local savedGemsTotal, savedItemsList, savedVisualState = loadSavedData()
+local addedItemsInventory = savedItemsList
+local addedGemsTotal = savedGemsTotal
+local visualGemsEnabled = savedVisualState
+
+local function formatNumberAbbreviated(val)
+    if not val then return "0" end
+    local absVal = math.abs(val)
+    
+    if absVal >= 1010 then
+        if absVal >= 1000000000000000 then return string.format("%.2fq", val / 1000000000000000)
+        elseif absVal >= 1000000000000 then return string.format("%.2ft", val / 1000000000000)
+        elseif absVal >= 1000000000 then return string.format("%.2fb", val / 1000000000)
+        elseif absVal >= 1000000 then return string.format("%.2fm", val / 1000000)
+        elseif absVal >= 1000 then return string.format("%.2fk", val / 1000) end
+    end
+    
+    local formattedInt = ""
+    local rev = string.reverse(tostring(math.floor(absVal)))
+    for i = 1, #rev do
+        formattedInt = formattedInt .. rev:sub(i, i)
+        if i % 3 == 0 and i ~= #rev then formattedInt = formattedInt .. "," end
+    end
+    formattedInt = string.reverse(formattedInt)
+    if val < 0 then formattedInt = "-" .. formattedInt end
+    return formattedInt
+end
+
+local function formatWithBracket(val)
+    if not val then val = 0 end
+    local formattedInt = ""
+    local rev = string.reverse(tostring(math.floor(val)))
+    for i = 1, #rev do
+        formattedInt = formattedInt .. rev:sub(i, i)
+        if i % 3 == 0 and i ~= #rev then formattedInt = formattedInt .. "," end
+    end
+    formattedInt = string.reverse(formattedInt)
+    return string.format("%s (%s)", formattedInt, formatNumberAbbreviated(val))
+end
+
+local function restoreOriginalGems()
+    local finalVal = math.max(0, realBaseGemsCount)
+    if player:FindFirstChild("leaderstats") then
+        local stats = player.leaderstats
+        if stats:FindFirstChild("\240\159\146\142 Diamonds") then
+            stats["\240\159\146\142 Diamonds"].Value = finalVal
+        end
+    end
+    pcall(function()
+        local targetAmount = playerGui.MainLeft.Left.Currency.Diamonds.Diamonds.Amount
+        if targetAmount and targetAmount:IsA("TextLabel") then
+            targetAmount.Text = formatNumberAbbreviated(finalVal)
+        end
+    end)
+end
+
+local function updateAllGemsDisplays()
+    local totalDisplayGems = realBaseGemsCount
+    if visualGemsEnabled then
+        totalDisplayGems = realBaseGemsCount + addedGemsTotal
+    else
+        restoreOriginalGems()
+        return
+    end
+    
+    if player:FindFirstChild("leaderstats") then
+        local stats = player.leaderstats
+        if stats:FindFirstChild("\240\159\146\142 Diamonds") then
+            stats["\240\159\146\142 Diamonds"].Value = totalDisplayGems
+        end
+    end
+
+    pcall(function()
+        local targetAmount = playerGui.MainLeft.Left.Currency.Diamonds.Diamonds.Amount
+        if targetAmount and targetAmount:IsA("TextLabel") then
+            targetAmount.Text = formatNumberAbbreviated(totalDisplayGems)
+        end
+    end)
+end
+
+updateAllGemsDisplays()
+
+local function parseInputWithSuffix(text)
+    if not text then return 0 end
+    text = string.lower(text):gsub(",", "."):gsub("%s+", " ")
+    local totalSum = 0
+    local foundAny = false
+
+    for numStr, suffix in text:gmatch("([0-9%.]+)%s*([kmgtqb]b?)") do
+        local num = tonumber(numStr)
+        if num then
+            foundAny = true
+            local multiplier = 1
+            if suffix == "k" then multiplier = 1000
+            elseif suffix == "m" then multiplier = 1000000
+            elseif suffix == "b" or suffix == "gb" then multiplier = 1000000000
+            elseif suffix == "t" or suffix == "tb" then multiplier = 1000000000000
+            elseif suffix == "q" or suffix == "qb" then multiplier = 1000000000000000 end
+            totalSum = totalSum + (num * multiplier)
+        end
+    end
+    if foundAny then return totalSum end
+
+    local pureSum = 0
+    for part in text:gmatch("%S+") do
+        local num = tonumber(part)
+        if num then pureSum = pureSum + num end
+    end
+    return pureSum
+end
+
+screenGui.Destroying:Connect(function()
+    restoreOriginalGems()
+    saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
+    clearAllVisualPetsFromWorkspace()
+end)
+
+local mainFrame = Instance.new("ImageLabel")
+mainFrame.Size = UDim2.new(0, 670, 0, 500)
+mainFrame.Position = UDim2.new(0.5, -335, 0.5, -250)
+mainFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+mainFrame.Image = "rbxassetid://13581793331"
+mainFrame.ScaleType = Enum.ScaleType.Tile
+mainFrame.TileSize = UDim2.new(0, 100, 0, 100)
+mainFrame.BorderSizePixel = 0
+mainFrame.ClipsDescendants = true
+mainFrame.Parent = screenGui
+
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 16)
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color = Color3.fromRGB(255, 130, 40)
+mainStroke.Thickness = 3
+mainStroke.Parent = mainFrame
+
+local uiBlocker = Instance.new("TextButton")
+uiBlocker.Size = UDim2.new(1, 0, 1, 0)
+uiBlocker.BackgroundTransparency = 1
+uiBlocker.BorderSizePixel = 0
+uiBlocker.Text = ""
+uiBlocker.Visible = false
+uiBlocker.AutoButtonColor = false
+uiBlocker.ZIndex = 50
+uiBlocker.Parent = mainFrame
+
+local topBar = Instance.new("Frame")
+topBar.Size = UDim2.new(1, 0, 0, 50)
+topBar.BackgroundColor3 = Color3.fromRGB(160, 160, 160)
+topBar.BackgroundTransparency = 0.2
+topBar.BorderSizePixel = 0
+topBar.Parent = mainFrame
+
+Instance.new("UICorner", topBar).CornerRadius = UDim.new(0, 16)
+
+local topCover = Instance.new("Frame")
+topCover.Size = UDim2.new(1, 0, 0, 10)
+topCover.Position = UDim2.new(0, 0, 1, -10)
+topCover.BackgroundColor3 = Color3.fromRGB(160, 160, 160)
+topCover.BackgroundTransparency = 0.2
+topCover.BorderSizePixel = 0
+topCover.Parent = topBar
+
+local dragging, dragInput, dragStart, startPos
+topBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+
+topBar.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(0, 400, 1, 0)
+titleLabel.Position = UDim2.new(0, 20, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Font = Enum.Font.FredokaOne
+titleLabel.Text = "🐾 PS99 Visual Script"
+titleLabel.TextColor3 = Color3.fromRGB(255, 220, 80)
+titleLabel.TextSize = 20
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = topBar
+
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 32, 0, 32)
+closeButton.Position = UDim2.new(1, -42, 0, 9)
+closeButton.BackgroundColor3 = Color3.fromRGB(255, 75, 100)
+closeButton.BorderSizePixel = 0
+closeButton.Font = Enum.Font.FredokaOne
+closeButton.Text = ""
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.TextSize = 18
+closeButton.Parent = topBar
+
+Instance.new("UICorner", closeButton).CornerRadius = UDim.new(1, 0)
+
+local closeIconX = Instance.new("TextLabel")
+closeIconX.Size = UDim2.new(1, 0, 1, 0)
+closeIconX.BackgroundTransparency = 1
+closeIconX.Font = Enum.Font.FredokaOne
+closeIconX.Text = "X"
+closeIconX.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeIconX.TextSize = 16
+closeIconX.Parent = closeButton
+
+closeButton.MouseButton1Click:Connect(function()
+    restoreOriginalGems()
+    saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
+    clearAllVisualPetsFromWorkspace()
+    screenGui:Destroy()
+end)
+
+local toggleVisualBtn = Instance.new("TextButton")
+toggleVisualBtn.Size = UDim2.new(0, 50, 0, 35)
+toggleVisualBtn.Position = UDim2.new(0, 603, 0, 58)
+toggleVisualBtn.BackgroundColor3 = visualGemsEnabled and Color3.fromRGB(70, 210, 110) or Color3.fromRGB(200, 50, 50)
+toggleVisualBtn.BackgroundTransparency = 0.2
+toggleVisualBtn.BorderSizePixel = 0
+toggleVisualBtn.Font = Enum.Font.FredokaOne
+toggleVisualBtn.Text = visualGemsEnabled and "ON" or "OFF"
+toggleVisualBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleVisualBtn.TextSize = 13
+toggleVisualBtn.Parent = mainFrame
+
+Instance.new("UICorner", toggleVisualBtn).CornerRadius = UDim.new(0, 10)
+
+local refreshAllVisualPetsInWorkspace = function() end
+local injectVisualPetsIntoGameInventory = function() end
+
+local function toggleVisualState()
+    visualGemsEnabled = not visualGemsEnabled
+    if visualGemsEnabled then
+        toggleVisualBtn.Text = "ON"
+        toggleVisualBtn.BackgroundColor3 = Color3.fromRGB(70, 210, 110)
+    else
+        toggleVisualBtn.Text = "OFF"
+        toggleVisualBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        restoreOriginalGems()
+        clearAllVisualPetsFromWorkspace()
+    end
+    updateAllGemsDisplays()
+    saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
+    refreshAllVisualPetsInWorkspace()
+    injectVisualPetsIntoGameInventory()
+end
+
+toggleVisualBtn.MouseButton1Click:Connect(toggleVisualState)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.F5 then
+        screenGui.Enabled = not screenGui.Enabled
+    elseif input.KeyCode == Enum.KeyCode.F6 then
+        toggleVisualState()
+    end
+end)
+
+local searchBox = Instance.new("TextBox")
+searchBox.Size = UDim2.new(0, 160, 0, 35)
+searchBox.Position = UDim2.new(0, 17, 0, 58)
+searchBox.BackgroundColor3 = Color3.fromRGB(160, 160, 160)
+searchBox.BackgroundTransparency = 0.3
+searchBox.BorderSizePixel = 0
+searchBox.Font = Enum.Font.GothamBold
+searchBox.PlaceholderText = "🔍 Search..."
+searchBox.Text = ""
+searchBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+searchBox.PlaceholderColor3 = Color3.fromRGB(220, 220, 220)
+searchBox.TextSize = 15
+searchBox.TextXAlignment = Enum.TextXAlignment.Left
+searchBox.Parent = mainFrame
+
+Instance.new("UICorner", searchBox).CornerRadius = UDim.new(0, 10)
+local searchStroke = Instance.new("UIStroke")
+searchStroke.Color = Color3.fromRGB(255, 130, 40)
+searchStroke.Thickness = 2
+searchStroke.Parent = searchBox
+
+local searchPadding = Instance.new("UIPadding")
+searchPadding.PaddingLeft = UDim.new(0, 12)
+searchPadding.Parent = searchBox
+
+local currentMainCategory = "Pets"
+local currentPetSubCategory = "Pets"
+local currentVisualSubCategory = "Pets"
+
+local lastSubCategoryPerMain = {
+    Pets = "Pets",
+    Gems = "Gems",
+    ["Added Visuals"] = "Pets"
+}
+
+local mainCategories = {"Pets", "Gems", "Added Visuals"}
+local petSubCategories = {"Pets", "Huges", "Titanics", "Gargantuans"}
+local addedVisualSubCategories = {"Pets", "Huges", "Titanics", "Gargantuans", "Gems"}
+
+local mainTabButtons = {}
+local subTabButtons = {}
+
+local mainCatContainer = Instance.new("Frame")
+mainCatContainer.Size = UDim2.new(0, 275, 0, 35)
+mainCatContainer.Position = UDim2.new(0, 185, 0, 58)
+mainCatContainer.BackgroundTransparency = 1
+mainCatContainer.Parent = mainFrame
+
+for i, catName in ipairs(mainCategories) do
+    local tabBtn = Instance.new("TextButton")
+    tabBtn.Size = UDim2.new(0, 85, 0, 35)
+    tabBtn.Position = UDim2.new(0, ((i - 1) * 95), 0, 0)
+    tabBtn.BackgroundColor3 = (catName == currentMainCategory) and Color3.fromRGB(255, 130, 40) or Color3.fromRGB(160, 160, 160)
+    tabBtn.BackgroundTransparency = 0.2
+    tabBtn.BorderSizePixel = 0
+    tabBtn.Font = Enum.Font.FredokaOne
+    tabBtn.Text = catName
+    tabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tabBtn.TextSize = 13
+    tabBtn.Parent = mainCatContainer
+
+    Instance.new("UICorner", tabBtn).CornerRadius = UDim.new(0, 10)
+    mainTabButtons[catName] = tabBtn
+end
+
+local scrollPositions = {}
+local subCatFrame = Instance.new("Frame")
+subCatFrame.Size = UDim2.new(0, 636, 0, 32)
+subCatFrame.Position = UDim2.new(0, 17, 0, 98)
+subCatFrame.BackgroundTransparency = 1
+subCatFrame.Parent = mainFrame
+
+local refreshGrid
+local contentGrid
+local gemsContainer
+local visualGemsContainer
+local currentGemsLabel
+
+local function updateSubTabs()
+    for _, child in ipairs(subCatFrame:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+    subTabButtons = {}
+
+    local listToUse = (currentMainCategory == "Added Visuals") and addedVisualSubCategories or petSubCategories
+    local totalTabs = #listToUse
+    local totalWidth = 636
+    
+    local tabWidth = math.floor(totalWidth / totalTabs) - 4
+    if currentMainCategory == "Pets" then tabWidth = math.floor(totalWidth / 4) - 4 end
+    local spacing = (totalTabs > 1) and ((totalWidth - (tabWidth * totalTabs)) / (totalTabs - 1)) or 0
+
+    for i, subName in ipairs(listToUse) do
+        local activeSub = (currentMainCategory == "Added Visuals") and currentVisualSubCategory or currentPetSubCategory
+
+        local subBtn = Instance.new("TextButton")
+        subBtn.Size = UDim2.new(0, tabWidth, 0, 30)
+        subBtn.Position = UDim2.new(0, math.floor((i - 1) * (tabWidth + spacing)), 0, 0)
+        subBtn.BackgroundColor3 = (subName == activeSub) and Color3.fromRGB(255, 120, 40) or Color3.fromRGB(160, 160, 160)
+        subBtn.BackgroundTransparency = 0.2
+        subBtn.BorderSizePixel = 0
+        subBtn.Font = Enum.Font.FredokaOne
+        subBtn.Text = subName
+        subBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        subBtn.TextSize = 11
+        subBtn.Parent = subCatFrame
+
+        Instance.new("UICorner", subBtn).CornerRadius = UDim.new(0, 8)
+        subTabButtons[subName] = subBtn
+
+        subBtn.MouseButton1Click:Connect(function()
+            local activeKey = currentMainCategory .. "_" .. ((currentMainCategory == "Added Visuals") and currentVisualSubCategory or currentPetSubCategory)
+            scrollPositions[activeKey] = contentGrid.CanvasPosition.Y
+
+            if currentMainCategory == "Added Visuals" then
+                currentVisualSubCategory = subName
+                lastSubCategoryPerMain["Added Visuals"] = subName
+            else
+                currentPetSubCategory = subName
+                lastSubCategoryPerMain["Pets"] = subName
+            end
+
+            updateSubTabs()
+            refreshGrid()
+
+            local newActiveKey = currentMainCategory .. "_" .. ((currentMainCategory == "Added Visuals") and currentVisualSubCategory or currentPetSubCategory)
+            if subName == "Pets" and currentMainCategory == "Pets" then
+                contentGrid.CanvasPosition = Vector2.new(0, 0)
+                scrollPositions[newActiveKey] = 0
+            else
+                contentGrid.CanvasPosition = Vector2.new(0, scrollPositions[newActiveKey] or 0)
+            end
+        end)
+    end
+end
+
+local loadingLabel = Instance.new("TextLabel")
+loadingLabel.Size = UDim2.new(1, 0, 0, 40)
+loadingLabel.Position = UDim2.new(0, 0, 0, 200)
+loadingLabel.BackgroundTransparency = 1
+loadingLabel.Font = Enum.Font.FredokaOne
+loadingLabel.Text = "⏳ Loading live data from Big Games API..."
+loadingLabel.TextColor3 = Color3.fromRGB(255, 220, 80)
+loadingLabel.TextSize = 18
+loadingLabel.Parent = mainFrame
+
+contentGrid = Instance.new("ScrollingFrame")
+contentGrid.Size = UDim2.new(0, 636, 0, 355)
+contentGrid.Position = UDim2.new(0, 17, 0, 135)
+contentGrid.BackgroundTransparency = 1
+contentGrid.BorderSizePixel = 0
+contentGrid.ScrollBarThickness = 0
+contentGrid.AutomaticCanvasSize = Enum.AutomaticSize.Y
+contentGrid.CanvasSize = UDim2.new(0, 0, 0, 0)
+contentGrid.Parent = mainFrame
+
+local gridLayout = Instance.new("UIGridLayout")
+gridLayout.CellSize = UDim2.new(0, 138, 0, 138)
+gridLayout.CellPadding = UDim2.new(0, 28, 0, 16)
+gridLayout.Parent = contentGrid
+
+gridLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    contentGrid.CanvasSize = UDim2.new(0, 0, 0, gridLayout.AbsoluteContentSize.Y + 20)
+end)
+
+gemsContainer = Instance.new("Frame")
+gemsContainer.Size = UDim2.new(1, 0, 1, -50)
+gemsContainer.Position = UDim2.new(0, 0, 0, 50)
+gemsContainer.BackgroundTransparency = 1
+gemsContainer.Visible = false
+gemsContainer.Parent = mainFrame
+
+local gemsCard = Instance.new("Frame")
+gemsCard.Size = UDim2.new(0, 420, 0, 275)
+gemsCard.Position = UDim2.new(0.5, -210, 0.5, -122)
+gemsCard.BackgroundColor3 = Color3.fromRGB(160, 160, 160)
+gemsCard.BackgroundTransparency = 0.2
+gemsCard.BorderSizePixel = 0
+gemsCard.Parent = gemsContainer
+
+Instance.new("UICorner", gemsCard).CornerRadius = UDim.new(0, 16)
+local gemsCardStroke = Instance.new("UIStroke")
+gemsCardStroke.Color = Color3.fromRGB(255, 130, 40)
+gemsCardStroke.Thickness = 2
+gemsCardStroke.Parent = gemsCard
+
+currentGemsLabel = Instance.new("TextLabel")
+currentGemsLabel.Size = UDim2.new(1, -40, 0, 35)
+currentGemsLabel.Position = UDim2.new(0, 20, 0, 18)
+currentGemsLabel.BackgroundTransparency = 1
+currentGemsLabel.Font = Enum.Font.FredokaOne
+currentGemsLabel.Text = "💎 Current Real Gems: " .. formatWithBracket(realBaseGemsCount)
+currentGemsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+currentGemsLabel.TextSize = 17
+currentGemsLabel.TextXAlignment = Enum.TextXAlignment.Center
+currentGemsLabel.Parent = gemsCard
+
+local addGemsInputBox = Instance.new("TextBox")
+addGemsInputBox.Size = UDim2.new(1, -40, 0, 42)
+addGemsInputBox.Position = UDim2.new(0, 20, 0, 70)
+addGemsInputBox.BackgroundColor3 = Color3.fromRGB(255, 130, 40)
+addGemsInputBox.BackgroundTransparency = 0.3
+addGemsInputBox.BorderSizePixel = 0
+addGemsInputBox.Font = Enum.Font.GothamBold
+addGemsInputBox.PlaceholderText = "Enter amount"
+addGemsInputBox.Text = ""
+addGemsInputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+addGemsInputBox.PlaceholderColor3 = Color3.fromRGB(220, 220, 220)
+addGemsInputBox.TextSize = 15
+addGemsInputBox.TextXAlignment = Enum.TextXAlignment.Center
+addGemsInputBox.Parent = gemsCard
+
+Instance.new("UICorner", addGemsInputBox).CornerRadius = UDim.new(0, 10)
+local agStroke = Instance.new("UIStroke")
+agStroke.Color = Color3.fromRGB(160, 160, 160)
+agStroke.Thickness = 2
+agStroke.Parent = gemsCard
+
+local finalGemsLabel = Instance.new("TextLabel")
+finalGemsLabel.Size = UDim2.new(1, -40, 0, 45)
+finalGemsLabel.Position = UDim2.new(0, 20, 0, 125)
+finalGemsLabel.BackgroundTransparency = 1
+finalGemsLabel.Font = Enum.Font.FredokaOne
+finalGemsLabel.Text = "✨ Total Gems After Adding: " .. formatWithBracket(realBaseGemsCount + addedGemsTotal)
+finalGemsLabel.TextColor3 = Color3.fromRGB(255, 220, 80)
+finalGemsLabel.TextSize = 17
+finalGemsLabel.TextWrapped = true
+finalGemsLabel.TextXAlignment = Enum.TextXAlignment.Center
+finalGemsLabel.Parent = gemsCard
+
+local addGemsBtn = Instance.new("TextButton")
+addGemsBtn.Size = UDim2.new(0, 160, 0, 40)
+addGemsBtn.Position = UDim2.new(0.5, -80, 0, 185)
+addGemsBtn.BackgroundColor3 = Color3.fromRGB(70, 210, 110)
+addGemsBtn.BackgroundTransparency = 0.2
+addGemsBtn.BorderSizePixel = 0
+addGemsBtn.Font = Enum.Font.FredokaOne
+addGemsBtn.Text = "Add Gems"
+addGemsBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+addGemsBtn.TextSize = 16
+addGemsBtn.Parent = gemsCard
+
+Instance.new("UICorner", addGemsBtn).CornerRadius = UDim.new(0, 10)
+
+addGemsInputBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local addVal = parseInputWithSuffix(addGemsInputBox.Text)
+    local totalVal = realBaseGemsCount + addedGemsTotal + addVal
+    finalGemsLabel.Text = "✨ Total Gems After Adding: " .. formatWithBracket(totalVal)
+end)
+
+addGemsBtn.MouseButton1Click:Connect(function()
+    local addVal = parseInputWithSuffix(addGemsInputBox.Text)
+    if addVal > 0 then
+        addedGemsTotal = addedGemsTotal + addVal
+        addGemsInputBox.Text = ""
+        local newTotal = realBaseGemsCount + addedGemsTotal
+        finalGemsLabel.Text = "✨ Total Gems After Adding: " .. formatWithBracket(newTotal)
+        saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
+        updateAllGemsDisplays()
+    end
+end)
+
+visualGemsContainer = Instance.new("Frame")
+visualGemsContainer.Size = UDim2.new(1, 0, 1, -50)
+visualGemsContainer.Position = UDim2.new(0, 0, 0, 50)
+visualGemsContainer.BackgroundTransparency = 1
+visualGemsContainer.Visible = false
+visualGemsContainer.Parent = mainFrame
+
+local updateVisualGemsCard
+updateVisualGemsCard = function()
+    for _, child in ipairs(visualGemsContainer:GetChildren()) do child:Destroy() end
+
+    local vgCard = Instance.new("Frame")
+    vgCard.Size = UDim2.new(0, 420, 0, 275)
+    vgCard.Position = UDim2.new(0.5, -210, 0.5, -122)
+    vgCard.BackgroundColor3 = Color3.fromRGB(160, 160, 160)
+    vgCard.BackgroundTransparency = 0.2
+    vgCard.BorderSizePixel = 0
+    vgCard.Parent = visualGemsContainer
+
+    Instance.new("UICorner", vgCard).CornerRadius = UDim.new(0, 16)
+    local vgCardStroke = Instance.new("UIStroke")
+    vgCardStroke.Color = Color3.fromRGB(255, 75, 100)
+    vgCardStroke.Thickness = 2
+    vgCardStroke.Parent = vgCard
+
+    local currentVGsLabel = Instance.new("TextLabel")
+    currentVGsLabel.Size = UDim2.new(1, -40, 0, 35)
+    currentVGsLabel.Position = UDim2.new(0, 20, 0, 16)
+    currentVGsLabel.BackgroundTransparency = 1
+    currentVGsLabel.Font = Enum.Font.FredokaOne
+    currentVGsLabel.Text = "💎 Added Visual Gems: " .. formatWithBracket(addedGemsTotal)
+    currentVGsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    currentVGsLabel.TextSize = 17
+    currentVGsLabel.TextXAlignment = Enum.TextXAlignment.Center
+    currentVGsLabel.Parent = vgCard
+
+    local removeVGsInputBox = Instance.new("TextBox")
+    removeVGsInputBox.Size = UDim2.new(1, -40, 0, 40)
+    removeVGsInputBox.Position = UDim2.new(0, 20, 0, 62)
+    removeVGsInputBox.BackgroundColor3 = Color3.fromRGB(255, 75, 100)
+    removeVGsInputBox.BackgroundTransparency = 0.3
+    removeVGsInputBox.BorderSizePixel = 0
+    removeVGsInputBox.Font = Enum.Font.GothamBold
+    removeVGsInputBox.PlaceholderText = "Enter amount to delete"
+    removeVGsInputBox.Text = ""
+    removeVGsInputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    removeVGsInputBox.PlaceholderColor3 = Color3.fromRGB(220, 220, 220)
+    removeVGsInputBox.TextSize = 14
+    removeVGsInputBox.TextXAlignment = Enum.TextXAlignment.Center
+    removeVGsInputBox.Parent = vgCard
+
+    Instance.new("UICorner", removeVGsInputBox).CornerRadius = UDim.new(0, 10)
+    local rStroke = Instance.new("UIStroke")
+    rStroke.Color = Color3.fromRGB(160, 160, 160)
+    rStroke.Thickness = 2
+    rStroke.Parent = vgCard
+
+    local finalVGsLabel = Instance.new("TextLabel")
+    finalVGsLabel.Size = UDim2.new(1, -40, 0, 40)
+    finalVGsLabel.Position = UDim2.new(0, 20, 0, 112)
+    finalVGsLabel.BackgroundTransparency = 1
+    finalVGsLabel.Font = Enum.Font.FredokaOne
+    local initialTotalVal = realBaseGemsCount + addedGemsTotal
+    finalVGsLabel.Text = "✨ Total Gems After Deleting: " .. formatWithBracket(initialTotalVal)
+    finalVGsLabel.TextColor3 = Color3.fromRGB(255, 220, 80)
+    finalVGsLabel.TextSize = 16
+    finalVGsLabel.TextWrapped = true
+    finalVGsLabel.TextXAlignment = Enum.TextXAlignment.Center
+    finalVGsLabel.Parent = vgCard
+
+    removeVGsInputBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local inputVal = parseInputWithSuffix(removeVGsInputBox.Text)
+        local currentTotal = realBaseGemsCount + addedGemsTotal
+        local totalVal = math.max(0, currentTotal - inputVal)
+        finalVGsLabel.Text = "✨ Total Gems After Deleting: " .. formatWithBracket(totalVal)
+    end)
+
+    local deleteBtn = Instance.new("TextButton")
+    deleteBtn.Size = UDim2.new(0, 180, 0, 38)
+    deleteBtn.Position = UDim2.new(0, 25, 0, 175)
+    deleteBtn.BackgroundColor3 = Color3.fromRGB(255, 75, 100)
+    deleteBtn.BackgroundTransparency = 0.2
+    deleteBtn.BorderSizePixel = 0
+    deleteBtn.Font = Enum.Font.FredokaOne
+    deleteBtn.Text = "Delete Gems"
+    deleteBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    deleteBtn.TextSize = 14
+    deleteBtn.Parent = vgCard
+    Instance.new("UICorner", deleteBtn).CornerRadius = UDim.new(0, 10)
+
+    local deleteAllBtn = Instance.new("TextButton")
+    deleteAllBtn.Size = UDim2.new(0, 180, 0, 38)
+    deleteAllBtn.Position = UDim2.new(1, -205, 0, 175)
+    deleteAllBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 60)
+    deleteAllBtn.BackgroundTransparency = 0.2
+    deleteAllBtn.BorderSizePixel = 0
+    deleteAllBtn.Font = Enum.Font.FredokaOne
+    deleteAllBtn.Text = "Delete All"
+    deleteAllBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    deleteAllBtn.TextSize = 14
+    deleteAllBtn.Parent = vgCard
+    Instance.new("UICorner", deleteAllBtn).CornerRadius = UDim.new(0, 10)
+
+    deleteBtn.MouseButton1Click:Connect(function()
+        local remVal = parseInputWithSuffix(removeVGsInputBox.Text)
+        if remVal > addedGemsTotal then remVal = addedGemsTotal end
+        if remVal > 0 then
+            addedGemsTotal = math.max(0, addedGemsTotal - remVal)
+            removeVGsInputBox.Text = ""
+            saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
+            updateVisualGemsCard()
+            updateAllGemsDisplays()
+        end
+    end)
+
+    deleteAllBtn.MouseButton1Click:Connect(function()
+        addedGemsTotal = 0
+        removeVGsInputBox.Text = ""
+        saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
+        updateVisualGemsCard()
+        updateAllGemsDisplays()
+    end)
+end
+
+local masterDatabase = {
+    Pets = {
+        Pets = {},
+        Huges = {},
+        Titanics = {},
+        Gargantuans = {}
+    }
+}
+
+local function openConfigPrompt(itemName, baseIcon, category, goldenIcon)
+    if playerGui:FindFirstChild("PS99ConfigPromptGui") then
+        playerGui.PS99ConfigPromptGui:Destroy()
+    end
+
+    local promptGui = Instance.new("ScreenGui")
+    promptGui.Name = "PS99ConfigPromptGui"
+    promptGui.DisplayOrder = 10
+    promptGui.Parent = playerGui
+
+    uiBlocker.Visible = true
+
+    local promptHeight = 400
+    local promptFrame = Instance.new("Frame")
+    promptFrame.Size = UDim2.new(0, 360, 0, promptHeight)
+    promptFrame.Position = UDim2.new(0.5, -180, 0.5, -(promptHeight/2))
+    promptFrame.BackgroundColor3 = Color3.fromRGB(160, 160, 160)
+    promptFrame.BackgroundTransparency = 0.1
+    promptFrame.BorderSizePixel = 0
+    promptFrame.Parent = promptGui
+
+    Instance.new("UICorner", promptFrame).CornerRadius = UDim.new(0, 14)
+    Instance.new("UIStroke", promptFrame).Color = Color3.fromRGB(255, 130, 40)
+
+    local pCloseBtn = Instance.new("TextButton")
+    pCloseBtn.Size = UDim2.new(0, 30, 0, 30)
+    pCloseBtn.Position = UDim2.new(1, -38, 0, 8)
+    pCloseBtn.BackgroundColor3 = Color3.fromRGB(255, 75, 100)
+    pCloseBtn.BorderSizePixel = 0
+    pCloseBtn.Font = Enum.Font.FredokaOne
+    pCloseBtn.Text = ""
+    pCloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    pCloseBtn.TextSize = 18
+    pCloseBtn.Parent = promptFrame
+
+    Instance.new("UICorner", pCloseBtn).CornerRadius = UDim.new(1, 0)
+    local pCloseIconX = Instance.new("TextLabel")
+    pCloseIconX.Size = UDim2.new(1, 0, 1, 0)
+    pCloseIconX.BackgroundTransparency = 1
+    pCloseIconX.Font = Enum.Font.FredokaOne
+    pCloseIconX.Text = "X"
+    pCloseIconX.TextColor3 = Color3.fromRGB(255, 255, 255)
+    pCloseIconX.TextSize = 16
+    pCloseIconX.Parent = pCloseBtn
+
+    pCloseBtn.MouseButton1Click:Connect(function()
+        uiBlocker.Visible = false
+        promptGui:Destroy()
+    end)
+
+    local promptIcon = Instance.new("ImageLabel")
+    promptIcon.Size = UDim2.new(0, 75, 0, 75)
+    promptIcon.Position = UDim2.new(0, 15, 0, 12)
+    promptIcon.BackgroundTransparency = 1
+    promptIcon.Image = baseIcon ~= "" and baseIcon or "rbxassetid://0"
+    promptIcon.ClipsDescendants = true
+    promptIcon.Parent = promptFrame
+
+    local rainbowOverlay = Instance.new("ImageLabel")
+    rainbowOverlay.Size = UDim2.new(1, 0, 1, 0)
+    rainbowOverlay.BackgroundTransparency = 1
+    rainbowOverlay.Image = "rbxassetid://11785042298"
+    rainbowOverlay.ImageTransparency = 0.45
+    rainbowOverlay.Visible = false
+    rainbowOverlay.Parent = promptIcon
+
+    local shinyOverlay = Instance.new("ImageLabel")
+    shinyOverlay.Size = UDim2.new(1, 0, 1, 0)
+    shinyOverlay.BackgroundTransparency = 1
+    shinyOverlay.Image = "rbxassetid://11785042298"
+    shinyOverlay.ImageTransparency = 0.4
+    shinyOverlay.Visible = false
+    shinyOverlay.Parent = promptIcon
+
+    local rainbowGradient = Instance.new("UIGradient")
+    rainbowGradient.Rotation = 45
+    rainbowGradient.Transparency = NumberSequence.new(0.3)
+    rainbowGradient.Color = ColorSequence.new(Color3.fromHSV(0, 1, 1))
+    rainbowGradient.Parent = rainbowOverlay
+
+    task.spawn(function()
+        local hue = 0
+        while promptGui.Parent do
+            hue = (hue + 0.004) % 1
+            local keypoints = {}
+            for i = 0, 6 do
+                local pos = i / 6
+                local h = (hue + pos) % 1
+                table.insert(keypoints, ColorSequenceKeypoint.new(pos, Color3.fromHSV(h, 1, 1)))
+            end
+            rainbowGradient.Color = ColorSequence.new(keypoints)
+            task.wait(0.016)
+        end
+    end)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -120, 0, 45)
+    lbl.Position = UDim2.new(0, 100, 0, 12)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.FredokaOne
+    lbl.Text = itemName
+    lbl.TextColor3 = Color3.fromRGB(255, 220, 80)
+    lbl.TextSize = 15
+    lbl.TextWrapped = true
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = promptFrame
+
+    local amtContainer = Instance.new("Frame")
+    amtContainer.Size = UDim2.new(0, 210, 0, 34)
+    amtContainer.Position = UDim2.new(0.5, -105, 0, 96)
+    amtContainer.BackgroundTransparency = 1
+    amtContainer.Parent = promptFrame
+
+    local amtDown = Instance.new("TextButton")
+    amtDown.Size = UDim2.new(0, 28, 1, 0)
+    amtDown.Position = UDim2.new(0, 0, 0, 0)
+    amtDown.BackgroundColor3 = Color3.fromRGB(255, 130, 40)
+    amtDown.BackgroundTransparency = 0.2
+    amtDown.BorderSizePixel = 0
+    amtDown.Font = Enum.Font.FredokaOne
+    amtDown.Text = "◀"
+    amtDown.TextColor3 = Color3.fromRGB(255, 200, 100)
+    amtDown.TextSize = 14
+    amtDown.Parent = amtContainer
+    Instance.new("UICorner", amtDown).CornerRadius = UDim.new(0, 8)
+
+    local amtBox = Instance.new("TextBox")
+    amtBox.Size = UDim2.new(1, -56, 1, 0)
+    amtBox.Position = UDim2.new(0, 28, 0, 0)
+    amtBox.BackgroundColor3 = Color3.fromRGB(255, 130, 40)
+    amtBox.BackgroundTransparency = 0.2
+    amtBox.BorderSizePixel = 0
+    amtBox.Font = Enum.Font.GothamBold
+    amtBox.PlaceholderText = "1"
+    amtBox.Text = "1"
+    amtBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    amtBox.TextSize = 15
+    amtBox.Parent = amtContainer
+    Instance.new("UICorner", amtBox).CornerRadius = UDim.new(0, 8)
+    local aStroke = Instance.new("UIStroke")
+    aStroke.Color = Color3.fromRGB(160, 160, 160)
+    aStroke.Thickness = 2
+    aStroke.Parent = amtBox
+
+    local amtUp = Instance.new("TextButton")
+    amtUp.Size = UDim2.new(0, 28, 1, 0)
+    amtUp.Position = UDim2.new(1, -28, 0, 0)
+    amtUp.BackgroundColor3 = Color3.fromRGB(255, 130, 40)
+    amtUp.BackgroundTransparency = 0.2
+    amtUp.BorderSizePixel = 0
+    amtUp.Font = Enum.Font.FredokaOne
+    amtUp.Text = "▶"
+    amtUp.TextColor3 = Color3.fromRGB(255, 200, 100)
+    amtUp.TextSize = 14
+    amtUp.Parent = amtContainer
+    Instance.new("UICorner", amtUp).CornerRadius = UDim.new(0, 8)
+
+    local confirmBtn = Instance.new("TextButton")
+    confirmBtn.Size = UDim2.new(0, 150, 0, 36)
+    confirmBtn.Position = UDim2.new(0.5, -75, 0, 345)
+    confirmBtn.BackgroundColor3 = Color3.fromRGB(70, 210, 110)
+    confirmBtn.BackgroundTransparency = 0.2
+    confirmBtn.BorderSizePixel = 0
+    confirmBtn.Font = Enum.Font.FredokaOne
+    confirmBtn.Text = "Add Pet"
+    confirmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    confirmBtn.TextSize = 15
+    confirmBtn.Parent = promptFrame
+    Instance.new("UICorner", confirmBtn).CornerRadius = UDim.new(0, 10)
+
+    local function updateAddButtonText()
+        local currentAmt = parseInputWithSuffix(amtBox.Text)
+        if currentAmt > 1 then confirmBtn.Text = "Add Pets"
+        else confirmBtn.Text = "Add Pet" end
+    end
+
+    local function updateAmount(delta)
+        local current = parseInputWithSuffix(amtBox.Text)
+        current = math.max(1, current + delta)
+        amtBox.Text = tostring(current)
+        updateAddButtonText()
+    end
+
+    amtUp.MouseButton1Click:Connect(function() updateAmount(1) end)
+    amtDown.MouseButton1Click:Connect(function() updateAmount(-1) end)
+    amtBox:GetPropertyChangedSignal("Text"):Connect(updateAddButtonText)
+
+    local selectedVersion = "Normal"
+    local isShiny = false
+
+    local function updateVisuals()
+        if selectedVersion == "Gold" and goldenIcon and goldenIcon ~= "rbxassetid://0" and goldenIcon ~= "" then
+            promptIcon.Image = goldenIcon
+        else
+            promptIcon.Image = baseIcon ~= "" and baseIcon or "rbxassetid://0"
+        end
+
+        if selectedVersion == "Rainbow" then
+            rainbowOverlay.Visible = true
+            rainbowOverlay.ImageTransparency = isShiny and 0.8 or 0.35
+            shinyOverlay.Visible = isShiny
+            if isShiny then shinyOverlay.ImageTransparency = 0.4 end
+            promptIcon.ImageTransparency = 0
+        elseif isShiny then
+            rainbowOverlay.Visible = false
+            shinyOverlay.Visible = true
+            shinyOverlay.ImageTransparency = 0.35
+            promptIcon.ImageTransparency = 0
+        else
+            rainbowOverlay.Visible = false
+            shinyOverlay.Visible = false
+            promptIcon.ImageTransparency = 0
+        end
+    end
+
+    local versions = {"Normal", "Gold", "Rainbow"}
+    local verButtons = {}
+
+    local verContainer = Instance.new("Frame")
+    verContainer.Size = UDim2.new(0, 300, 0, 95)
+    verContainer.Position = UDim2.new(0.5, -150, 0, 138)
+    verContainer.BackgroundTransparency = 1
+    verContainer.Parent = promptFrame
+
+    for i, verName in ipairs(versions) do
+        local vBtn = Instance.new("TextButton")
+        vBtn.Size = UDim2.new(1, 0, 0, 28)
+        vBtn.Position = UDim2.new(0, 0, 0, (i - 1) * 33)
+        vBtn.Text = verName
+        vBtn.BackgroundColor3 = (verName == selectedVersion) and Color3.fromRGB(255, 130, 40) or Color3.fromRGB(36, 24, 70)
+        vBtn.BackgroundTransparency = 0.2
+        vBtn.BorderSizePixel = 0
+        vBtn.Font = Enum.Font.FredokaOne
+        vBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        vBtn.TextSize = 15
+        vBtn.Parent = verContainer
+        Instance.new("UICorner", vBtn).CornerRadius = UDim.new(0, 8)
+
+        verButtons[verName] = vBtn
+
+        vBtn.MouseButton1Click:Connect(function()
+            selectedVersion = verName
+            for v, btn in pairs(verButtons) do
+                btn.BackgroundColor3 = (v == selectedVersion) and Color3.fromRGB(255, 130, 40) or Color3.fromRGB(36, 24, 70)
+            end
+            updateVisuals()
+        end)
+    end
+
+    local shinyBtn = Instance.new("TextButton")
+    shinyBtn.Size = UDim2.new(0, 300, 0, 32)
+    shinyBtn.Position = UDim2.new(0.5, -150, 0, 242)
+    shinyBtn.BackgroundColor3 = Color3.fromRGB(36, 24, 70)
+    shinyBtn.Text = "✨ Shiny: OFF"
+    shinyBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    shinyBtn.Font = Enum.Font.FredokaOne
+    shinyBtn.TextSize = 15
+    shinyBtn.Parent = promptFrame
+    Instance.new("UICorner", shinyBtn).CornerRadius = UDim.new(0, 8)
+
+    shinyBtn.MouseButton1Click:Connect(function()
+        isShiny = not isShiny
+        shinyBtn.Text = isShiny and "✨ Shiny: ON" or "✨ Shiny: OFF"
+        shinyBtn.BackgroundColor3 = isShiny and Color3.fromRGB(220, 160, 40) or Color3.fromRGB(36, 24, 70)
+        shinyBtn.TextColor3 = isShiny and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
+        updateVisuals()
+    end)
+
+    confirmBtn.MouseButton1Click:Connect(function()
+        local amount = parseInputWithSuffix(amtBox.Text)
+        if amount > 0 then
+            local foundExisting = false
+            for _, invItem in ipairs(addedItemsInventory) do
+                if invItem.Name == itemName and invItem.SubCategory == category and invItem.Version == selectedVersion and invItem.Shiny == isShiny then
+                    invItem.Amount = invItem.Amount + amount
+                    foundExisting = true
+                    break
+                end
+            end
+
+            if not foundExisting then
+                local finalStoredIcon = baseIcon
+                if selectedVersion == "Gold" and goldenIcon and goldenIcon ~= "" and goldenIcon ~= "rbxassetid://0" then
+                    finalStoredIcon = goldenIcon
+                end
+
+                table.insert(addedItemsInventory, {
+                    Name = itemName,
+                    Category = "Pets",
+                    SubCategory = category,
+                    Icon = finalStoredIcon,
+                    BaseIcon = baseIcon,
+                    GoldenIcon = goldenIcon,
+                    Amount = amount,
+                    Version = selectedVersion,
+                    Shiny = isShiny
+                })
+            end
+
+            saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
+            injectVisualPetsIntoGameInventory()
+        end
+        uiBlocker.Visible = false
+        promptGui:Destroy()
+    end)
+end
+
+refreshGrid = function()
+    for _, child in ipairs(contentGrid:GetChildren()) do
+        if child:IsA("TextButton") or child:IsA("Frame") then child:Destroy() end
+    end
+
+    local isAddedVisuals = (currentMainCategory == "Added Visuals")
+    subCatFrame.Visible = (currentMainCategory == "Pets" or isAddedVisuals)
+    
+    local isGemsSelected = (currentMainCategory == "Gems" or (isAddedVisuals and currentVisualSubCategory == "Gems"))
+    contentGrid.Visible = not isGemsSelected
+    gemsContainer.Visible = (currentMainCategory == "Gems")
+    visualGemsContainer.Visible = (isAddedVisuals and currentVisualSubCategory == "Gems")
+
+    if isGemsSelected then
+        if currentMainCategory == "Added Visuals" then updateVisualGemsCard()
+        elseif currentMainCategory == "Gems" then
+            if currentGemsLabel then currentGemsLabel.Text = "💎 Current Real Gems: " .. formatWithBracket(realBaseGemsCount) end
+        end
+        return
+    end
+
+    local searchText = string.lower(searchBox.Text)
+    local currentList = {}
+
+    if isAddedVisuals then
+        for _, entry in ipairs(addedItemsInventory) do
+            if entry.Category == "Pets" and entry.SubCategory == currentVisualSubCategory then
+                if searchText == "" or string.find(string.lower(entry.Name), searchText) then
+                    table.insert(currentList, entry)
+                end
+            end
+        end
+    else
+        currentList = masterDatabase.Pets[currentPetSubCategory] or {}
+    end
+
+    for _, item in ipairs(currentList) do
+        local itemName = item.Name
+        if searchText == "" or string.find(string.lower(itemName), searchText) then
+            local card
+            local isAddedVisualsTab = isAddedVisuals
+            
+            if isAddedVisualsTab then
+                card = Instance.new("TextButton")
+                card.BackgroundColor3 = Color3.fromRGB(160, 160, 160)
+                card.BackgroundTransparency = 0.2
+                card.BorderSizePixel = 0
+                card.AutoButtonColor = true
+                card.Text = ""
+
+                Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
+                local cardStroke = Instance.new("UIStroke")
+                cardStroke.Color = Color3.fromRGB(255, 130, 40)
+                cardStroke.Thickness = 2
+                cardStroke.Parent = card
+
+                local icon = Instance.new("ImageLabel")
+                icon.Size = UDim2.new(0, 50, 0, 50)
+                icon.Position = UDim2.new(0.5, -25, 0, 8)
+                icon.BackgroundTransparency = 1
+                icon.Image = item.Icon ~= "" and item.Icon or "rbxassetid://0"
+                icon.ClipsDescendants = true
+                icon.Parent = card
+
+                local nameLabel = Instance.new("TextLabel")
+                nameLabel.Size = UDim2.new(1, -12, 0, 55)
+                nameLabel.Position = UDim2.new(0, 6, 0, 64)
+                nameLabel.BackgroundTransparency = 1
+                nameLabel.Font = Enum.Font.FredokaOne
+                nameLabel.Text = itemName
+                nameLabel.TextColor3 = Color3.fromRGB(240, 240, 255)
+                nameLabel.TextSize = 13
+                nameLabel.TextWrapped = true
+                nameLabel.Parent = card
+
+                local qtyLabel = Instance.new("TextLabel")
+                qtyLabel.Size = UDim2.new(1, -10, 0, 20)
+                qtyLabel.Position = UDim2.new(0, 5, 0, 5)
+                qtyLabel.BackgroundTransparency = 1
+                qtyLabel.Font = Enum.Font.FredokaOne
+                qtyLabel.Text = "x" .. tostring(item.Amount or 1)
+                qtyLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+                qtyLabel.TextSize = 14
+                qtyLabel.TextXAlignment = Enum.TextXAlignment.Left
+                qtyLabel.Parent = card
+
+                card.Parent = contentGrid
+            else
+                card = Instance.new("TextButton")
+                card.BackgroundColor3 = Color3.fromRGB(160, 160, 160)
+                card.BackgroundTransparency = 0.2
+                card.BorderSizePixel = 0
+                card.AutoButtonColor = true
+                card.Text = ""
+
+                Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
+                local cardStroke = Instance.new("UIStroke")
+                cardStroke.Color = Color3.fromRGB(255, 130, 40)
+                cardStroke.Thickness = 2
+                cardStroke.Parent = card
+
+                local icon = Instance.new("ImageLabel")
+                icon.Size = UDim2.new(0, 50, 0, 50)
+                icon.Position = UDim2.new(0.5, -25, 0, 8)
+                icon.BackgroundTransparency = 1
+                icon.Image = item.Icon ~= "" and item.Icon or "rbxassetid://0"
+                icon.ClipsDescendants = true
+                icon.Parent = card
+
+                local nameLabel = Instance.new("TextLabel")
+                nameLabel.Size = UDim2.new(1, -12, 0, 55)
+                nameLabel.Position = UDim2.new(0, 6, 0, 64)
+                nameLabel.BackgroundTransparency = 1
+                nameLabel.Font = Enum.Font.FredokaOne
+                nameLabel.Text = itemName
+                nameLabel.TextColor3 = Color3.fromRGB(240, 240, 255)
+                nameLabel.TextSize = 13
+                nameLabel.TextWrapped = true
+                nameLabel.Parent = card
+
+                card.MouseButton1Click:Connect(function()
+                    openConfigPrompt(itemName, item.Icon, currentPetSubCategory, item.GoldenIcon)
+                end)
+                
+                card.Parent = contentGrid
+            end
+
+            if isAddedVisuals then
+                card.MouseButton1Click:Connect(function()
+                    if playerGui:FindFirstChild("PS99RemovePromptGui") then
+                        playerGui.PS99RemovePromptGui:Destroy()
+                    end
+
+                    local rGui = Instance.new("ScreenGui")
+                    rGui.Name = "PS99RemovePromptGui"
+                    rGui.DisplayOrder = 15
+                    rGui.Parent = playerGui
+                    uiBlocker.Visible = true
+
+                    local displayTitle = itemName
+                    local parts = {}
+                    if item.Version and item.Version ~= "Normal" then table.insert(parts, item.Version) end
+                    if item.Shiny then table.insert(parts, "Shiny") end
+                    table.insert(parts, itemName)
+                    displayTitle = table.concat(parts, " ")
+
+                    local rFrame = Instance.new("Frame")
+                    rFrame.Size = UDim2.new(0, 320, 0, 200)
+                    rFrame.Position = UDim2.new(0.5, -160, 0.5, -100)
+                    rFrame.BackgroundColor3 = Color3.fromRGB(160, 160, 160)
+                    rFrame.BackgroundTransparency = 0.1
+                    rFrame.BorderSizePixel = 0
+                    rFrame.Parent = rGui
+                    Instance.new("UICorner", rFrame).CornerRadius = UDim.new(0, 14)
+                    Instance.new("UIStroke", rFrame).Color = Color3.fromRGB(255, 130, 40)
+
+                    local rCloseBtn = Instance.new("TextButton")
+                    rCloseBtn.Size = UDim2.new(0, 28, 0, 28)
+                    rCloseBtn.Position = UDim2.new(1, -34, 0, 8)
+                    rCloseBtn.BackgroundColor3 = Color3.fromRGB(255, 75, 100)
+                    rCloseBtn.BorderSizePixel = 0
+                    rCloseBtn.Font = Enum.Font.FredokaOne
+                    rCloseBtn.Text = ""
+                    rCloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    rCloseBtn.TextSize = 16
+                    rCloseBtn.Parent = rFrame
+
+                    Instance.new("UICorner", rCloseBtn).CornerRadius = UDim.new(1, 0)
+                    local rCloseIconX = Instance.new("TextLabel")
+                    rCloseIconX.Size = UDim2.new(1, 0, 1, 0)
+                    rCloseIconX.BackgroundTransparency = 1
+                    rCloseIconX.Font = Enum.Font.FredokaOne
+                    rCloseIconX.Text = "X"
+                    rCloseIconX.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    rCloseIconX.TextSize = 14
+                    rCloseIconX.Parent = rCloseBtn
+
+                    rCloseBtn.MouseButton1Click:Connect(function()
+                        uiBlocker.Visible = false
+                        rGui:Destroy()
+                    end)
+
+                    local rLbl = Instance.new("TextLabel")
+                    rLbl.Size = UDim2.new(1, -50, 0, 40)
+                    rLbl.Position = UDim2.new(0, 10, 0, 15)
+                    rLbl.BackgroundTransparency = 1
+                    rLbl.Font = Enum.Font.FredokaOne
+                    rLbl.Text = "Manage: " .. displayTitle
+                    rLbl.TextColor3 = Color3.fromRGB(255, 220, 80)
+                    rLbl.TextSize = 15
+                    rLbl.TextWrapped = true
+                    rLbl.Parent = rFrame
+
+                    local remInput = Instance.new("TextBox")
+                    remInput.Size = UDim2.new(1, -40, 0, 35)
+                    remInput.Position = UDim2.new(0, 20, 0, 65)
+                    remInput.BackgroundColor3 = Color3.fromRGB(255, 130, 40)
+                    remInput.BackgroundTransparency = 0.3
+                    remInput.BorderSizePixel = 0
+                    remInput.Font = Enum.Font.GothamBold
+                    remInput.PlaceholderText = "Amount to remove"
+                    remInput.Text = "1"
+                    remInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    remInput.TextSize = 14
+                    remInput.Parent = rFrame
+                    Instance.new("UICorner", remInput).CornerRadius = UDim.new(0, 8)
+
+                    local remPartBtn = Instance.new("TextButton")
+                    remPartBtn.Size = UDim2.new(0, 130, 0, 36)
+                    remPartBtn.Position = UDim2.new(0, 20, 0, 120)
+                    remPartBtn.BackgroundColor3 = Color3.fromRGB(220, 120, 40)
+                    remPartBtn.Font = Enum.Font.FredokaOne
+                    remPartBtn.Text = "Remove Qty"
+                    remPartBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    remPartBtn.TextSize = 14
+                    remPartBtn.Parent = rFrame
+                    Instance.new("UICorner", remPartBtn).CornerRadius = UDim.new(0, 8)
+
+                    local remAllBtn = Instance.new("TextButton")
+                    remAllBtn.Size = UDim2.new(0, 130, 0, 36)
+                    remAllBtn.Position = UDim2.new(1, -150, 0, 120)
+                    remAllBtn.BackgroundColor3 = Color3.fromRGB(255, 75, 100)
+                    remAllBtn.Font = Enum.Font.FredokaOne
+                    remAllBtn.Text = "Remove All"
+                    remAllBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    remAllBtn.TextSize = 14
+                    remAllBtn.Parent = rFrame
+                    Instance.new("UICorner", remAllBtn).CornerRadius = UDim.new(0, 8)
+
+                    remPartBtn.MouseButton1Click:Connect(function()
+                        local remVal = parseInputWithSuffix(remInput.Text)
+                        item.Amount = item.Amount - remVal
+                        if item.Amount <= 0 then
+                            for idx, invItem in ipairs(addedItemsInventory) do
+                                if invItem == item then
+                                    table.remove(addedItemsInventory, idx)
+                                    break
+                                end
+                            end
+                        end
+                        saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
+                        uiBlocker.Visible = false
+                        rGui:Destroy()
+                        refreshGrid()
+                        injectVisualPetsIntoGameInventory()
+                    end)
+
+                    remAllBtn.MouseButton1Click:Connect(function()
+                        for idx, invItem in ipairs(addedItemsInventory) do
+                            if invItem == item then
+                                table.remove(addedItemsInventory, idx)
+                                break
+                            end
+                        end
+                        saveData(addedGemsTotal, addedItemsInventory, visualGemsEnabled)
+                        uiBlocker.Visible = false
+                        rGui:Destroy()
+                        refreshGrid()
+                        injectVisualPetsIntoGameInventory()
+                    end)
+                end)
+            end
+        end
+    end
+end
+
+local function spawnVisualPetModel(itemData)
+    if not petsDirectory then return nil end
+    
+    local subFolderName = "Uncategorized"
+    local subCat = itemData.SubCategory
+    
+    if subCat == "Gargantuans" then subFolderName = "Gargantuan"
+    elseif subCat == "Titanics" then subFolderName = "Titanic"
+    elseif subCat == "Huges" then subFolderName = "Huge" end
+    
+    local targetFolder = petsDirectory:FindFirstChild(subFolderName) or petsDirectory:FindFirstChild("Uncategorized") or petsDirectory
+    local template = targetFolder:FindFirstChild(itemData.Name)
+    
+    if not template and #targetFolder:GetChildren() > 0 then
+        template = targetFolder:GetChildren()[1]
+    end
+    
+    if not template then return nil end
+    
+    local variantSource = nil
+    local version = tostring(itemData.Version or "Normal")
+    local versionLower = string.lower(version)
+    local itemNameLower = string.lower(itemData.Name or "")
+    
+    local isRainbowType = string.find(versionLower, "rainbow") ~= nil or string.find(itemNameLower, "rainbow") ~= nil
+    local isGoldType = string.find(versionLower, "gold") ~= nil or string.find(versionLower, "golden") ~= nil or string.find(itemNameLower, "gold") ~= nil
+    local isShinyType = (itemData.Shiny == true) or (string.find(versionLower, "shiny") ~= nil) or (string.find(itemNameLower, "shiny") ~= nil)
+    
+    if isGoldType then
+        variantSource = template:FindFirstChild("Golden") or template:FindFirstChild("Gold") or template:FindFirstChild("Gold Shiny")
+    elseif isRainbowType then
+        variantSource = template:FindFirstChild("Rainbow") or template:FindFirstChild("Shiny Rainbow") or template:FindFirstChild("Pet")
+    else
+        variantSource = template:FindFirstChild("Pet") or template:FindFirstChild("Normal")
+    end
+    
+    if not variantSource then variantSource = template:FindFirstChildWhichIsA("Folder", true) or template end
+    if variantSource and variantSource:IsA("Folder") then
+        variantSource = variantSource:FindFirstChildWhichIsA("BasePart", true) or variantSource:FindFirstChildWhichIsA("Model", true)
+    end
+    if not variantSource then variantSource = template end
+    
+    local successClone, clonedPart = pcall(function() return variantSource:Clone() end)
+    if not successClone or not clonedPart then return nil end
+    
+    local petId = tostring(math.random(100000, 999999))
+    local newPetModel = Instance.new("Model")
+    newPetModel.Name = petId
+    
+    clonedPart.Name = petId
+    clonedPart.Parent = newPetModel
+    
+    if isRainbowType then applyCustomRainbowStyle(newPetModel, isShinyType) end
+    if isShinyType then applyShinyEffects(newPetModel, subCat) end
+    
+    setupPetModelPhysics(newPetModel)
+    
+    if clonedPart:IsA("BasePart") then newPetModel.PrimaryPart = clonedPart
+    else
+        local p = clonedPart:FindFirstChildWhichIsA("BasePart", true)
+        if p then newPetModel.PrimaryPart = p end
+    end
+    
+    local thingsFolder = Workspace:WaitForChild("__THINGS", 5)
+    local workspacePets = thingsFolder and thingsFolder:WaitForChild("Pets", 5)
+    newPetModel.Parent = workspacePets or Workspace
+    
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        local charRoot = player.Character.HumanoidRootPart
+        local randomOffset = Vector3.new(math.random(-5, 5), 0, math.random(-5, 5))
+        local spawnCFrame = charRoot.CFrame + (charRoot.CFrame.LookVector * 5) + randomOffset + Vector3.new(0, 2, 0)
+        if newPetModel.PrimaryPart then newPetModel:SetPrimaryPartCFrame(spawnCFrame) end
+    end
+    
+    return newPetModel
+end
+
+refreshAllVisualPetsInWorkspace = function()
+    clearAllVisualPetsFromWorkspace()
+    if not visualGemsEnabled or not addedItemsInventory then return end
+    
+    for _, item in ipairs(addedItemsInventory) do
+        if item.Category == "Pets" then
+            local subCatCheck = string.lower(item.SubCategory or "")
+            local isTitanicOrGargantuan = (subCatCheck == "titanics" or string.find(subCatCheck, "titanic") or subCatCheck == "gargantuans" or string.find(subCatCheck, "gargantuan"))
+            
+            local spawnCount = 1
+            if isTitanicOrGargantuan then
+                spawnCount = item.Amount or 1
+            else
+                spawnCount = math.min(item.Amount or 1, 10)
+            end
+            
+            for i = 1, spawnCount do
+                local spawnedModel = spawnVisualPetModel(item)
+                if spawnedModel then table.insert(spawnedVisualPetInstances, spawnedModel) end
+            end
+        end
+    end
+end
+
+injectVisualPetsIntoGameInventory = function()
+    local inventoryFrame = playerGui:FindFirstChild("Inventory")
+    local mainPetsContainer = inventoryFrame and inventoryFrame:FindFirstChild("Frame") and inventoryFrame.Frame:FindFirstChild("Main") and inventoryFrame.Frame.Main:FindFirstChild("Pets")
+    
+    if not mainPetsContainer then return end
+
+    for _, child in ipairs(mainPetsContainer:GetChildren()) do
+        if child:GetAttribute("InjectedVisualPet") == true then
+            child:Destroy()
+        end
+    end
+
+    if not visualGemsEnabled or not addedItemsInventory then return end
+
+    for _, item in ipairs(addedItemsInventory) do
+        if item.Category == "Pets" then
+            local targetFolder = mainPetsContainer
+            local subCatLowerCheck = string.lower(item.SubCategory or "")
+            
+            if subCatLowerCheck == "titanics" or string.find(subCatLowerCheck, "titanic") then
+                targetFolder = mainPetsContainer:FindFirstChild("PetsTitanic") or mainPetsContainer
+            elseif subCatLowerCheck == "gargantuans" or string.find(subCatLowerCheck, "gargantuan") then
+                targetFolder = mainPetsContainer:FindFirstChild("PetsGargantuan") or mainPetsContainer
+            else
+                targetFolder = mainPetsContainer:FindFirstChild("Pets") or mainPetsContainer
+            end
+
+            local templateSource = targetFolder:GetChildren()[5] or targetFolder:FindFirstChildWhichIsA("Frame")
+            
+            local totalCount = item.Amount or 1
+            local isHugeOrHigherCheck = string.find(subCatLowerCheck, "huge") or string.find(subCatLowerCheck, "titanic") or string.find(subCatLowerCheck, "gargantuan")
+            
+            local loops = isHugeOrHigherCheck and totalCount or 1
+
+            for i = 1, loops do
+                local card
+                if templateSource then
+                    card = templateSource:Clone()
+                    card.Name = "ItemSlot"
+                    card.Parent = targetFolder
+                else
+                    card = Instance.new("TextButton")
+                    card.Name = "ItemSlot"
+                    card.Parent = targetFolder
+                end
+
+                setupPetSlot(card, templateSource, item)
+                card:SetAttribute("InjectedVisualPet", true)
+                card.Visible = true
+
+                for _, desc in ipairs(card:GetDescendants()) do
+                    if desc:IsA("TextButton") or desc:IsA("ImageButton") then
+                        desc.Active = true
+                    end
+                end
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    local requestFunc = syn and syn.request or http_request or request
+    if not requestFunc then
+        loadingLabel.Text = "❌ Error: Executor does not support HTTP requests!"
+        return
+    end
+
+    local function fetchCollection(colName)
+        local success, res = pcall(function()
+            return requestFunc({ Url = "https://ps99.biggamesapi.io/api/collection/" .. colName, Method = "GET" })
+        end)
+        if success and res and res.Body then
+            local decoded = HttpService:JSONDecode(res.Body)
+            if decoded and decoded.data then return decoded.data end
+        end
+        return {}
+    end
+
+    local petsData = fetchCollection("Pets")
+
+    local function getThumbnail(configData)
+        if configData and configData.thumbnail then
+            local thumb = tostring(configData.thumbnail)
+            if string.find(thumb, "rbxassetid://") then return thumb
+            elseif tonumber(thumb) then return "rbxassetid://" .. thumb end
+        end
+        return "rbxassetid://0"
+    end
+
+    for _, entry in ipairs(petsData) do
+        local config = entry.configData or {}
+        local name = config.name or entry.configName or "Unknown Pet"
+        local goldenThumb = "rbxassetid://0"
+        if config.goldenThumbnail and config.goldenThumbnail ~= "" then
+            local gt = tostring(config.goldenThumbnail)
+            if string.find(gt, "rbxassetid://") then goldenThumb = gt
+            elseif tonumber(gt) then goldenThumb = "rbxassetid://" .. gt end
+        end
+        local petItem = { Name = name, Icon = getThumbnail(config), GoldenIcon = goldenThumb }
+
+        local catLower = string.lower(entry.category or "")
+        local nameLower = string.lower(name)
+
+        if string.find(nameLower, "gargantuan") then table.insert(masterDatabase.Pets.Gargantuans, petItem)
+        elseif string.find(nameLower, "titanic") or catLower == "titanic" then table.insert(masterDatabase.Pets.Titanics, petItem)
+        elseif string.find(nameLower, "huge") or catLower == "huge" or config.huge then table.insert(masterDatabase.Pets.Huges, petItem)
+        else table.insert(masterDatabase.Pets.Pets, petItem) end
+    end
+
+    loadingLabel:Destroy()
+    updateSubTabs()
+    refreshGrid()
+end)
+
+searchBox:GetPropertyChangedSignal("Text"):Connect(refreshGrid)
+
+for catName, btn in pairs(mainTabButtons) do
+    btn.MouseButton1Click:Connect(function()
+        local activeKey = currentMainCategory .. "_" .. ((currentMainCategory == "Added Visuals") and currentVisualSubCategory or currentPetSubCategory)
+        scrollPositions[activeKey] = contentGrid.CanvasPosition.Y
+
+        currentMainCategory = catName
+        for name, b in pairs(mainTabButtons) do
+            b.BackgroundColor3 = (name == currentMainCategory) and Color3.fromRGB(255, 130, 40) or Color3.fromRGB(160, 160, 160)
+        end
+
+        if catName == "Pets" then currentPetSubCategory = lastSubCategoryPerMain["Pets"]
+        elseif catName == "Added Visuals" then currentVisualSubCategory = lastSubCategoryPerMain["Added Visuals"] end
+
+        updateSubTabs()
+        refreshGrid()
+
+        local newActiveKey = currentMainCategory .. "_" .. ((currentMainCategory == "Added Visuals") and currentVisualSubCategory or currentPetSubCategory)
+        contentGrid.CanvasPosition = Vector2.new(0, scrollPositions[newActiveKey] or 0)
+    end)
+end
+
+updateSubTabs()
+
+local lastInventorySignature = ""
+local function getInventorySignature()
+    if not addedItemsInventory then return "" end
+    local sig = ""
+    for _, item in ipairs(addedItemsInventory) do
+        if item.Category == "Pets" then
+            sig = sig .. item.Name .. "_" .. tostring(item.Amount) .. "_" .. tostring(item.Version) .. "_" .. tostring(item.Shiny) .. "_"
+        end
+    end
+    return sig
+end
+
+task.spawn(function()
+    while screenGui and screenGui.Parent do
+        local currentSig = getInventorySignature()
+        if currentSig ~= lastInventorySignature then
+            lastInventorySignature = currentSig
+            refreshAllVisualPetsInWorkspace()
+            injectVisualPetsIntoGameInventory()
+        end
+        task.wait(0.5)
+    end
+end)
+
+if visualGemsEnabled then
+    task.spawn(function()
+        task.wait(2)
+        refreshAllVisualPetsInWorkspace()
+        injectVisualPetsIntoGameInventory()
+    end)
+end
