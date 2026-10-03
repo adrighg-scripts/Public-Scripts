@@ -7,6 +7,14 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Publi
 
   <h1>Copy Loadstrings:</h1>
 
+  ## Coordinate
+
+
+
+```bash
+loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/Coordinate.lua"))()
+```
+
 ## Knockout (Patched)
 
 
