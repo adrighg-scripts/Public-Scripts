@@ -23,6 +23,14 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Publi
 loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/Delete%20Parts.lua"))()
 ```
 
+  ## Game Id Teller
+
+
+
+```bash
+loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/Game%20Id%20Teller.lua"))()
+```
+
 ## Knockout (Patched)
 
 
