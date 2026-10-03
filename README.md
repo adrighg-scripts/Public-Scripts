@@ -40,10 +40,26 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Publi
 ```
 
 
-## Pet Simulator 99
+## Murder Duells
 
 
 
 ```bash
-loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/zabhub.xyz/Exec"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/Murder%20Duells.lua"))()
+```
+
+## Slap Battles
+
+
+
+```bash
+loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/Slap%20Battles.lua"))()
+```
+
+## Teleport Manager
+
+
+
+```bash
+loadstring(game:HttpGet("https://raw.githubusercontent.com/adrighg-scripts/Public-Scripts/refs/heads/main/Teleport%20%20Manager.lua"))()
 ```
